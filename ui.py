@@ -7,7 +7,7 @@ from constants import *
 
 EVO_TABLE = {
 	(FACTION_RED, "铁卫"):   [
-		{"name": "盾卫",   "desc": "铁壁：不动时反击近战"},
+		{"name": "盾卫",   "desc": "铁壁：不动时相邻友方减伤1（光环）"},
 		{"name": "弩卫",   "desc": "劲弩：射程2，移动后不可远攻"},
 	],
 	(FACTION_DIS, "散兽"):   [
@@ -220,14 +220,14 @@ class UIState:
 		n_btns  = 2
 		if cfg.is_base(u.x, u.y) and not u.is_embryo:
 			n_btns += 1
-		if u.level >= 2 and not u.made_unit and not u.is_embryo:
+		if u.level >= 2 and not u.made_unit and not u.is_embryo and getattr(u, "can_make", True):
 			n_btns += 1
 		start_y = cfg.board_offset_y + total_h - (n_btns * (ACT_BTN_H + 5)) - 6
 
 		actions = [(ACT_NONE, "⚔ 自动攻击"), (ACT_DEFEND, "🛡 防御")]
 		if cfg.is_base(u.x, u.y) and not u.is_embryo:
 			actions.append((ACT_OCCUPY, "🚩 占领"))
-		if u.level >= 2 and not u.made_unit and not u.is_embryo:
+		if u.level >= 2 and not u.made_unit and not u.is_embryo and getattr(u, "can_make", True):
 			actions.append((ACT_MAKE, "🐣 制造"))
 
 		for i, (act, label) in enumerate(actions):
@@ -318,4 +318,4 @@ class UIState:
 		return None
 
 	def current_faction(self):
-		return FACTION_RED if self.phase in ("p1_plan", "p1_done") else FACTION_DIS
+		return FACTION_RED if self.phase in ("p1_plan", "p1_done") else FACTIO

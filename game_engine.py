@@ -280,22 +280,28 @@ class GameState:
 				dl = self._calc_damage(l, w, all_alive)
 				l.take_damage(dw); w.take_damage(dl)
 				log.append(f"💥 碰撞互攻：{w.name}↔{l.name}  互伤{dw}/{dl}")
+				if dw == 0 and self.effective_atk(w) > 0:
+					l.kills += 1
+					log.append(f"⭐ {l.name} 防住攻击！+1经验({l.kills})")
+				if dl == 0 and self.effective_atk(l) > 0:
+					w.kills += 1
+					log.append(f"⭐ {w.name} 防住攻击！+1经验({w.kills})")
 				w._collision_partner = l.uid; l._collision_partner = w.uid
 			elif w_atk:
 				d = self._calc_damage(w, l, all_alive)
 				l.take_damage(d)
 				log.append(f"💥 碰撞：{w.name}→{l.name}  伤{d}")
-				if l.has_trait("铁壁") and not l.did_move:
-					c = self._calc_damage(l, w, all_alive); w.take_damage(c)
-					log.append(f"🛡️ 铁壁反击 伤{c}")
+				if d == 0 and self.effective_atk(w) > 0:
+					l.kills += 1
+					log.append(f"⭐ {l.name} 防住攻击！+1经验({l.kills})")
 				w._collision_partner = l.uid; l._collision_partner = w.uid
 			elif l_atk:
 				d = self._calc_damage(l, w, all_alive)
 				w.take_damage(d)
 				log.append(f"💥 碰撞：{l.name}→{w.name}  伤{d}")
-				if w.has_trait("铁壁") and not w.did_move:
-					c = self._calc_damage(w, l, all_alive); l.take_damage(c)
-					log.append(f"🛡️ 铁壁反击 伤{c}")
+				if d == 0 and self.effective_atk(l) > 0:
+					w.kills += 1
+					log.append(f"⭐ {w.name} 防住攻击！+1经验({w.kills})")
 				w._collision_partner = l.uid; l._collision_partner = w.uid
 			else:
 				log.append(f"🤝 碰撞双防：无伤害")
@@ -351,13 +357,16 @@ class GameState:
 				else:
 					target.pending_dmg += dmg
 					log.append(f"⚔️ {atk.name}({atk.faction[:3]}) → {target.name}  伤{dmg}")
-					if target.has_trait("铁壁") and not target.did_move and not atk.ranged:
-						c = self._calc_damage(target, atk, all_alive)
-						atk.pending_dmg += c
-						log.append(f"🛡️ 铁壁反击 伤{c}")
-						# 铁壁反击代替后手普攻，锁定该对
-						processed.add(pair)
 					# 非同速单向攻击：不锁定，慢速方稍后仍可攻击快速方
+				# 防住判定（dmg=0 但攻击有效）：防守方 +1 经验
+				if dmg == 0 and self.effective_atk(atk) > 0:
+					target.kills += 1
+					log.append(f"⭐ {target.name} 防住攻击！+1经验({target.kills})")
+				if t_atks_back:
+					dmg2_val = self._calc_damage(target, atk, all_alive) if t_atks_back else 0
+					if dmg2_val == 0 and self.effective_atk(target) > 0:
+						atk.kills += 1
+						log.append(f"⭐ {atk.name} 防住反攻！+1经验({atk.kills})")
 
 			for u in self.alive_units():
 				if u.pending_dmg > 0:
@@ -395,7 +404,7 @@ class GameState:
 								log.append(f"💥 集群：{nb.name} −1HP")
 
 		for u in self.alive_units():
-			if u.planned_action == ACT_MAKE and u.level >= 2 and not u.made_unit:
+			if u.planned_action == ACT_MAKE and u.level >= 2 and not u.made_unit and u.can_make:
 				self._do_make(u, log)
 
 	def _auto_find_target(self, attacker, all_alive):
@@ -455,11 +464,15 @@ class GameState:
 		for a in adjacent_units(attacker, all_alive):
 			if a.faction == attacker.faction and a.has_trait("战旗"):
 				atk += 1; break
-		# 防御减免：1（从原来的2改为1）
+		# 防御减免
 		def_bonus = 1 if defender.defending else 0
 		if defender.has_trait("硬壳"):
 			def_bonus += 1
-		if defender.has_trait("列阵") and not defender.did_move:   # 原版：不动时减伤1
+		if defender.has_trait("列阵") and not defender.did_move:
+			def_bonus += 1
+		# 铁壁光环：相邻己方盾卫（未移动）给防守方+1减伤
+		if any(a.faction == defender.faction and a.has_trait("铁壁") and not a.did_move
+				for a in adjacent_units(defender, all_alive)):
 			def_bonus += 1
 		return max(0, atk - def_bonus)
 
@@ -553,3 +566,4 @@ class GameState:
 		if self.cfg.shared_base and self.cfg.shared_base in self.base_states:
 			return self.base_states[self.cfg.shared_base].occupy_count
 		return 0
+73 
