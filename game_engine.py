@@ -44,12 +44,12 @@ class BaseState:
 		if faction != self.occupier:
 			self.occupier     = faction
 			self.occupy_count = 0
-			name = "红方" if faction == FACTION_RED else "灾方"
+			name = "红骑士团" if faction == FACTION_RED else "灾兽群"
 			log.append(f"🏳️ {name} 夺回本阵{bpos}")
 
 		if [u for u in real if u.faction == faction] and not effect_rift:
 			self.occupy_count += 1
-			name = "红方" if self.occupier == FACTION_RED else "灾方"
+			name = "红骑士团" if self.occupier == FACTION_RED else "灾兽群"
 			log.append(f"🚩 {name} 占领本阵{bpos} 第{self.occupy_count}回合")
 			for u in real:
 				if u.level == 1:
@@ -135,7 +135,6 @@ class GameState:
 		"""规划阶段预测自动攻击目标（供 UI 预览）"""
 		self._pre_pos = {u.uid: (u.x, u.y) for u in self.alive_units()}
 		return self._auto_find_target(unit, self.alive_units())
-
 	# ─── 执行回合 ───────────────────────────────
 
 	def execute_turn(self):
@@ -360,6 +359,7 @@ class GameState:
 
 		# 反击阶段：被攻击的存活单位进行反击
 		# 防御中 → 反击所有攻击者；未防御 → 只反击第一个攻击者
+		main_event_end = len(self.last_attack_events)   # 记录主攻击事件数量边界
 		cur_alive = self.alive_units()
 		for tgt_uid, atk_uids in attacks_received.items():
 			tgt = self.get_unit_by_uid(tgt_uid)
@@ -379,12 +379,13 @@ class GameState:
 				if atk.dead:
 					log.append(f"💀 {atk.name}({atk.faction[:3]}) 反击阵亡")
 
-		# 噬溃：本回合攻击目标死亡则回复1HP
+		# 噬溃：本回合【主攻击】目标死亡则回复1HP（不含反击触发）
 		for atk in attackers:
 			if atk.dead or not atk.has_trait("噬溃"):
 				continue
-			# 找本回合攻击的目标（已攻击且死亡）
-			atk_evts = [e for e in self.last_attack_events if e[0] == atk.uid and not e[2]]
+			# 只检查主攻击阶段的事件（main_event_end 之前）
+			atk_evts = [e for e in self.last_attack_events[:main_event_end]
+				if e[0] == atk.uid and not e[2]]
 			for _, tgt_uid, _, _ in atk_evts:
 				tgt = self.get_unit_by_uid(tgt_uid)
 				if tgt and tgt.dead:
@@ -523,7 +524,7 @@ class GameState:
 		# 每3回合：每方经验最高且未达进化门槛的单位额外+1经验
 		if self.turn % 3 == 0:
 			for faction in (FACTION_RED, FACTION_DIS):
-				fname = "红方" if faction == FACTION_RED else "灾方"
+				fname = "红骑士团" if faction == FACTION_RED else "灾兽群"
 				# 候选：非胚体、未到3级、尚未触发进化的单位
 				def _capped(u):
 					return (u.level == 1 and u.kills >= 1) or (u.level == 2 and u.kills >= 3)
@@ -584,24 +585,24 @@ class GameState:
 			red_hp = sum(u.hp for u in self.units if u.faction == FACTION_RED)
 			dis_hp = sum(u.hp for u in self.units if u.faction == FACTION_DIS)
 			if red_hp > dis_hp:
-				self.winner = FACTION_RED; self.win_reason = "同归于尽（红方HP占优）"
+				self.winner = FACTION_RED; self.win_reason = "同归于尽（红骑士团HP占优）"
 			elif dis_hp > red_hp:
-				self.winner = FACTION_DIS; self.win_reason = "同归于尽（灾方HP占优）"
+				self.winner = FACTION_DIS; self.win_reason = "同归于尽（灾兽群HP占优）"
 			else:
-				self.winner = FACTION_RED; self.win_reason = "同归于尽（完全平局，红方优先）"
+				self.winner = FACTION_RED; self.win_reason = "同归于尽（完全平局，红骑士团优先）"
 			log.append(f"⚖️ 双方同归于尽！{self.win_reason}"); return
 		if not red:
-			self.winner = FACTION_DIS; self.win_reason = "全歼红方"
-			log.append("🏆 灾方胜利！"); return
+			self.winner = FACTION_DIS; self.win_reason = "全歼红骑士团"
+			log.append("🏆 灾兽群胜利！"); return
 		if not dis:
-			self.winner = FACTION_RED; self.win_reason = "全歼灾方"
-			log.append("🏆 红方胜利！"); return
+			self.winner = FACTION_RED; self.win_reason = "全歼灾兽群"
+			log.append("🏆 红骑士团胜利！"); return
 		for bpos, bstate in self.base_states.items():
 			w = bstate.winner()
 			if w:
 				self.winner = w
 				self.win_reason = f"连续占领{bpos} 2回合"
-				log.append(f"🏆 {'红方' if w == FACTION_RED else '灾方'} 胜利！"); return
+				log.append(f"🏆 {'红骑士团' if w == FACTION_RED else '灾兽群'} 胜利！"); return
 
 	def _update_camp_level(self):
 		if self.turn >= 3 and self.camp_level < 2:
@@ -621,4 +622,3 @@ class GameState:
 		if self.cfg.shared_base and self.cfg.shared_base in self.base_states:
 			return self.base_states[self.cfg.shared_base].occupy_count
 		return 0
-73 

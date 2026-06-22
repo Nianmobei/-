@@ -1,33 +1,33 @@
-# 血轨：兵种定义与单位类（调低一级血量，支持范围移动）
+# 血轨：兵种定义与单位类
+# 红骑士团（有序战争）vs 灾兽（混乱传播）
 
 from constants import *
 
 # ─────────────────── 兵种模板 ───────────────────
-# 数值设计：
-#   1级 atk=2 hp=3 spd=1 → 互攻2下死(2+2>3)，攻对防-1=1伤
-#   2级 hp提升，增加耐久
-#   3级 hp进一步提升
 
 UNIT_TEMPLATES = {
-	# 1级：atk=2 hp=3 spd=1
+	# ── 红骑士团 ──────────────────────────────────
+	# 1级
 	"铁卫":   dict(faction=FACTION_RED, level=1, max_hp=4, atk=2, spd=1, trait="列阵",  ranged=False, can_make=False),
-	"散兽":   dict(faction=FACTION_DIS, level=1, max_hp=3, atk=2, spd=1, trait="噬溃",  ranged=False, can_make=False),
-	# 2级 红
+	# 2级
 	"盾卫":   dict(faction=FACTION_RED, level=2, max_hp=6, atk=2, spd=2, trait="铁壁",  ranged=False, can_make=False),
 	"弩卫":   dict(faction=FACTION_RED, level=2, max_hp=5, atk=2, spd=3, trait="劲弩",  ranged=True,  can_make=False),
-	# 2级 灾
-	"甲兽":   dict(faction=FACTION_DIS, level=2, max_hp=6, atk=2, spd=2, trait="硬壳",  ranged=False, can_make=False),
-	"炮兽":   dict(faction=FACTION_DIS, level=2, max_hp=5, atk=2, spd=3, trait="投射",  ranged=True,  can_make=False),
-	# 3级 红 A路（保守）
+	# 3级 A路（精锐化）
 	"盾卫3A": dict(faction=FACTION_RED, level=3, max_hp=8, atk=3, spd=2, trait="铁壁",  ranged=False, can_make=False),
 	"弩卫3A": dict(faction=FACTION_RED, level=3, max_hp=7, atk=3, spd=3, trait="劲弩",  ranged=True,  can_make=False),
-	# 3级 红 B路（进化）
+	# 3级 B路（突破化）
 	"旗卫":   dict(faction=FACTION_RED, level=3, max_hp=8, atk=4, spd=3, trait="战旗",  ranged=False, can_make=False),
 	"战车":   dict(faction=FACTION_RED, level=3, max_hp=7, atk=2, spd=5, trait="冲阵",  ranged=False, can_make=False),
-	# 3级 灾 A路（保守）
+	# ── 灾兽 ──────────────────────────────────────
+	# 1级
+	"散兽":   dict(faction=FACTION_DIS, level=1, max_hp=3, atk=2, spd=1, trait="噬溃",  ranged=False, can_make=False),
+	# 2级
+	"甲兽":   dict(faction=FACTION_DIS, level=2, max_hp=6, atk=2, spd=2, trait="硬壳",  ranged=False, can_make=False),
+	"炮兽":   dict(faction=FACTION_DIS, level=2, max_hp=5, atk=2, spd=3, trait="投射",  ranged=True,  can_make=False),
+	# 3级 A路（强化）
 	"甲兽3A": dict(faction=FACTION_DIS, level=3, max_hp=8, atk=3, spd=2, trait="硬壳",  ranged=False, can_make=False),
 	"炮兽3A": dict(faction=FACTION_DIS, level=3, max_hp=7, atk=3, spd=3, trait="投射",  ranged=True,  can_make=False),
-	# 3级 灾 B路（进化）
+	# 3级 B路（灾化）
 	"恐兽":   dict(faction=FACTION_DIS, level=3, max_hp=8, atk=4, spd=2, trait="威压",  ranged=False, can_make=False),
 	"猎群兽": dict(faction=FACTION_DIS, level=3, max_hp=7, atk=2, spd=3, trait="集群",  ranged=True,  can_make=False),
 	# 胚体
@@ -97,7 +97,7 @@ class Unit:
 		self.defending      = False
 		self.did_move       = False
 		self.stun_move      = False
-		for attr in ("_collision_partner", "_pending_evo", "_pending_evo3"):
+		for attr in ("_collision_partner", "_pending_evo", "_pending_evo3", "_high_ground_bonus"):
 			if hasattr(self, attr):
 				delattr(self, attr)
 

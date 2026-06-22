@@ -17,30 +17,30 @@ def _alpha_surf(w, h):
 
 # 阶段配色方案
 PHASE_PALETTE = {
-	"p1_plan": {
-		"panel_bg":    (32, 14, 10),
-		"panel_bdr":   (200, 60, 40),
-		"accent":      C_RED,
-		"accent_lite": C_RED_LITE,
-		"label":       "红方规划",
-		"hint":        (255, 80, 60),
-	},
-	"p1_done": {
-		"panel_bg":    (20, 10, 8),
-		"panel_bdr":   (120, 40, 28),
-		"accent":      C_RED,
-		"accent_lite": C_RED_LITE,
-		"label":       "切换阵营",
-		"hint":        (180, 60, 50),
-	},
-	"p2_plan": {
-		"panel_bg":    (10, 28, 16),
-		"panel_bdr":   (40, 180, 80),
-		"accent":      C_DIS,
-		"accent_lite": C_DIS_LITE,
-		"label":       "灾方规划",
-		"hint":        (60, 200, 100),
-	},
+		"p1_plan": {
+			"panel_bg":    (32, 14, 10),
+			"panel_bdr":   (200, 60, 40),
+			"accent":      C_RED,
+			"accent_lite": C_RED_LITE,
+			"label":       "红骑士团规划",
+			"hint":        (255, 80, 60),
+		},
+		"p1_done": {
+			"panel_bg":    (20, 10, 8),
+			"panel_bdr":   (120, 40, 28),
+			"accent":      C_RED,
+			"accent_lite": C_RED_LITE,
+			"label":       "切换阵营",
+			"hint":        (180, 60, 50),
+		},
+		"p2_plan": {
+			"panel_bg":    (10, 28, 16),
+			"panel_bdr":   (40, 180, 80),
+			"accent":      C_DIS,
+			"accent_lite": C_DIS_LITE,
+			"label":       "灾兽群规划",
+			"hint":        (60, 200, 100),
+		},
 	"animating": {
 		"panel_bg":    C_PANEL_BG,
 		"panel_bdr":   C_PANEL_BDR,
@@ -173,7 +173,7 @@ class Renderer:
 				# 本阵标签
 				if cfg.is_base(cx, cy):
 					owner = cfg.base_owner(cx, cy)
-					lbl   = "红阵" if owner == FACTION_RED else "灾阵"
+					lbl   = "骑士阵" if owner == FACTION_RED else "灾兽巢"
 					col   = C_RED if owner == FACTION_RED else C_DIS
 					fkey  = "small" if cs >= 76 else "tiny"
 					self._text_on(target, rx + cs // 2, ry + cs - 13, lbl,
@@ -543,7 +543,7 @@ class Renderer:
 		self._text(x + 4, y + 116, "本阵占领", self.fonts["tiny"], C_GRAY)
 		py = y + 129
 		for bpos, bstate in game.base_states.items():
-			lbl = "红阵" if bstate.owner == FACTION_RED else "灾阵"
+			lbl = "骑士阵" if bstate.owner == FACTION_RED else "灾兽巢"
 			if bstate.occupier:
 				oc  = "红" if bstate.occupier == FACTION_RED else "灾"
 				fc  = C_OCCUPY_RED if bstate.occupier == FACTION_RED else C_OCCUPY_DIS
@@ -629,8 +629,8 @@ class Renderer:
 
 		ry = y + 32
 		for faction, label, color in [
-			(FACTION_RED, "★ 红方", C_RED),
-			(FACTION_DIS, "☠ 灾方", C_DIS),
+			(FACTION_RED, "★ 红骑士团", C_RED),
+			(FACTION_DIS, "☠ 灾兽群",   C_DIS),
 		]:
 			# 阵营分隔标题
 			pygame.draw.rect(self.screen, (*color, 40)[:3], (x + 2, ry, w - 4, 16),
@@ -682,12 +682,12 @@ class Renderer:
 
 		# 阶段文字
 		phase_lines = {
-			"p1_plan":    ("【红方规划】",    "拖拽棋子移动  •  左侧面板选择行动  •  红虚线 = 预测攻击目标"),
-			"p1_done":    ("【切换阵营 ▶】",  "请灾方接手  •  点击任意处继续"),
-			"p2_plan":    ("【灾方规划】",    "拖拽棋子移动  •  左侧面板选择行动  •  红虚线 = 预测攻击目标"),
-			"animating":  ("【执行中…】",     ""),
-			"result":     ("【结算完毕】",    "点击确认 / Enter 继续下一回合"),
-			"game_over":  ("【游戏结束】",    "关闭窗口退出"),
+			"p1_plan":    ("【红骑士团规划】", "拖拽棋子移动  •  左侧面板选择行动  •  红虚线 = 预测攻击目标"),
+			"p1_done":    ("【切换阵营 ▶】",   "请灾兽群接手  •  点击任意处继续"),
+			"p2_plan":    ("【灾兽群规划】",   "拖拽棋子移动  •  左侧面板选择行动  •  红虚线 = 预测攻击目标"),
+			"animating":  ("【执行中…】",      ""),
+			"result":     ("【结算完毕】",     "点击确认 / Enter 继续下一回合"),
+			"game_over":  ("【游戏结束】",     "关闭窗口退出"),
 		}
 		title, sub = phase_lines.get(ui.phase, ("", ""))
 		self._text(12, by + 7, title, self.fonts["bold"], pal["accent"])
@@ -810,3 +810,4 @@ class Renderer:
 		if text:
 			lines.append(text)
 		return lines
+ 

@@ -245,7 +245,7 @@ class UIState:
 		if self.phase == "p1_plan":
 			self.phase = "p1_done"
 			self.show_phase_banner = True
-			self.banner_text = "红方规划完成 —— 请灾方接手，点击任意处继续"
+			self.banner_text = "红骑士团规划完成 —— 请灾兽群接手，点击任意处继续"
 			return None
 		elif self.phase == "p2_plan":
 			self.phase = "p2_done"

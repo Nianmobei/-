@@ -88,7 +88,7 @@ def main():
 	pygame.init()
 	cfg    = GameConfig("9x9")
 	screen = pygame.display.set_mode((cfg.screen_w, cfg.screen_h))
-	pygame.display.set_caption("血轨 v1.3 · 9×9 战场")
+	pygame.display.set_caption("兵戮灾 · 红之纷争  v1.4")
 	clock  = pygame.time.Clock()
 	fonts  = load_fonts()
 
@@ -99,7 +99,7 @@ def main():
 	anim     = AnimationManager()
 
 	ui.show_phase_banner = True
-	ui.banner_text = "血轨 v1.4 · 9×9战场  战壕(4,4)减伤  高地(0,4)(8,4)攻+1  |  点击开始"
+	ui.banner_text = "兵戮灾 · 红之纷争  战壕(4,4)减伤  高地(0,4)(8,4)攻+1  |  点击开始"
 
 	running   = True
 	pre_snap  = {}
@@ -133,7 +133,7 @@ def main():
 				ui.queue_evolutions(game)
 				if game.winner:
 					ui.phase = "game_over"
-					wname = "红方" if game.winner == FACTION_RED else "灾方"
+					wname = "红骑士团" if game.winner == FACTION_RED else "灾兽群"
 					ui.show_phase_banner = True
 					ui.banner_text = f"🏆 {wname} 获胜！  {game.win_reason}  |  关闭窗口退出"
 

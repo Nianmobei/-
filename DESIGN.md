@@ -74,8 +74,8 @@
 | 格子 | 类型 | 效果 | 颜色代码 |
 |------|------|------|---------|
 | (4,4) 中心 | 战壕 `trench` | 防守方减伤 1 | `C_TERRAIN_TRENCH` 蓝灰 |
-| (0,4) 左中 | 高地 `high` | 攻击方 +1 攻 | `C_TERRAIN_HIGH` 暗金 |
-| (8,4) 右中 | 高地 `high` | 攻击方 +1 攻 | `C_TERRAIN_HIGH` 暗金 |
+| (0,4) 左中 | 高地 `high` | **本回合结束时在高地上 → 下回合移动力+1**（两方对称） | `C_TERRAIN_HIGH` 暗金 |
+| (8,4) 右中 | 高地 `high` | 同上 | `C_TERRAIN_HIGH` 暗金 |
 
 地形判定在 `GameConfig.terrain_at(x,y)` 和 `GameState._calc_damage`、`GameState.effective_atk` 中实现。
 
