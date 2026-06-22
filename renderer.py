@@ -1,4 +1,4 @@
-# 血轨：渲染器（动画 + 拖拽预览 + 规划指示）
+# 血轨：渲染器 v2 — 分阶段配色、脉冲光晕、震屏、地形渲染
 
 import pygame
 import math
@@ -10,23 +10,105 @@ def _lerp_color(c1, c2, t):
 	return tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
 
 
+def _alpha_surf(w, h):
+	s = pygame.Surface((w, h), pygame.SRCALPHA)
+	return s
+
+
+# 阶段配色方案
+PHASE_PALETTE = {
+	"p1_plan": {
+		"panel_bg":    (32, 14, 10),
+		"panel_bdr":   (200, 60, 40),
+		"accent":      C_RED,
+		"accent_lite": C_RED_LITE,
+		"label":       "红方规划",
+		"hint":        (255, 80, 60),
+	},
+	"p1_done": {
+		"panel_bg":    (20, 10, 8),
+		"panel_bdr":   (120, 40, 28),
+		"accent":      C_RED,
+		"accent_lite": C_RED_LITE,
+		"label":       "切换阵营",
+		"hint":        (180, 60, 50),
+	},
+	"p2_plan": {
+		"panel_bg":    (10, 28, 16),
+		"panel_bdr":   (40, 180, 80),
+		"accent":      C_DIS,
+		"accent_lite": C_DIS_LITE,
+		"label":       "灾方规划",
+		"hint":        (60, 200, 100),
+	},
+	"animating": {
+		"panel_bg":    C_PANEL_BG,
+		"panel_bdr":   C_PANEL_BDR,
+		"accent":      C_GOLD,
+		"accent_lite": C_GOLD,
+		"label":       "执行中",
+		"hint":        C_GOLD,
+	},
+	"result": {
+		"panel_bg":    C_PANEL_BG,
+		"panel_bdr":   C_GOLD,
+		"accent":      C_GOLD,
+		"accent_lite": C_GOLD,
+		"label":       "结算完毕",
+		"hint":        C_GOLD,
+	},
+	"game_over": {
+		"panel_bg":    (28, 8, 6),
+		"panel_bdr":   C_GOLD,
+		"accent":      C_GOLD,
+		"accent_lite": C_GOLD,
+		"label":       "游戏结束",
+		"hint":        C_GOLD,
+	},
+}
+
+_DEFAULT_PALETTE = PHASE_PALETTE["result"]
+
+
 class Renderer:
 	def __init__(self, screen: pygame.Surface, fonts: dict):
 		self.screen = screen
 		self.fonts  = fonts
+		self._pulse_t = 0.0   # 脉冲时钟
+
+	def _palette(self, ui):
+		return PHASE_PALETTE.get(ui.phase, _DEFAULT_PALETTE)
 
 	# ──────────────────── 主入口 ─────────────────────
 
 	def draw(self, game, ui, anim=None):
+		self._pulse_t += 0.035
+		pal = self._palette(ui)
+
+		# 震屏偏移
+		sx, sy = (0, 0)
+		if anim and anim.is_playing:
+			sx, sy = anim.get_shake()
+		sx, sy = int(sx), int(sy)
+
 		self.screen.fill(C_BG)
-		self._draw_board(game, ui, anim)
-		self._draw_plan_overlays(game, ui)        # 规划指示层
-		self._draw_drag_piece(game, ui)           # 拖拽中的棋子
-		self._draw_left_panel(game, ui)
-		self._draw_right_panel(game, ui)
-		self._draw_bottom_bar(game, ui)
+
+		# 绘制到偏移 surface（震屏）
+		if sx or sy:
+			board_surf = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
+			self._draw_board(game, ui, anim, surf=board_surf)
+			self.screen.blit(board_surf, (sx, sy))
+		else:
+			self._draw_board(game, ui, anim)
+
+		self._draw_plan_overlays(game, ui)
+		self._draw_drag_piece(game, ui)
+		self._draw_left_panel(game, ui, pal)
+		self._draw_right_panel(game, ui, pal)
+		self._draw_bottom_bar(game, ui, pal)
 		if anim and anim.is_playing:
 			self._draw_damage_tags(game, ui, anim)
+			self._draw_projectiles(game, anim)
 		if ui.show_evo_dialog:
 			self._draw_evo_dialog(game, ui)
 		if ui.show_phase_banner:
@@ -34,12 +116,13 @@ class Renderer:
 
 	# ──────────────────── 棋盘格 ─────────────────────
 
-	def _draw_board(self, game, ui, anim):
-		cfg   = game.cfg
-		cs    = cfg.cell_size
-		ox    = cfg.board_offset_x
-		oy    = cfg.board_offset_y
-		gs    = cfg.grid_size
+	def _draw_board(self, game, ui, anim, surf=None):
+		target = surf if surf else self.screen
+		cfg = game.cfg
+		cs  = cfg.cell_size
+		ox  = cfg.board_offset_x
+		oy  = cfg.board_offset_y
+		gs  = cfg.grid_size
 
 		for cy in range(gs):
 			for cx in range(gs):
@@ -47,7 +130,6 @@ class Renderer:
 				ry = oy + cy * cs
 				rect = pygame.Rect(rx, ry, cs, cs)
 
-				# 底色
 				terrain = cfg.terrain_at(cx, cy)
 				if cfg.is_base(cx, cy):
 					color = cfg.base_color(cfg.base_owner(cx, cy))
@@ -59,69 +141,80 @@ class Renderer:
 					color = C_CELL
 				else:
 					color = C_CELL_ALT
-				pygame.draw.rect(self.screen, color, rect)
+				pygame.draw.rect(target, color, rect)
 
 				# 移动范围高亮
 				if (cx, cy) in ui.move_hints:
-					s = pygame.Surface((cs, cs), pygame.SRCALPHA)
-					alpha = 55 if (cx, cy) != ui.hover_cell else 90
-					s.fill((*C_MOVE_HINT, alpha))
-					self.screen.blit(s, (rx, ry))
+					pal = self._palette(ui)
+					s = _alpha_surf(cs, cs)
+					alpha = 70 if (cx, cy) != ui.hover_cell else 110
+					hint_col = pal["accent"]
+					s.fill((*hint_col, alpha // 3))
+					pygame.draw.rect(s, (*hint_col, alpha), (0, 0, cs, cs), 3)
+					target.blit(s, (rx, ry))
 
 				# 选定目标格
 				if ui.selected_move_cell and (cx, cy) == ui.selected_move_cell:
-					s = pygame.Surface((cs, cs), pygame.SRCALPHA)
-					s.fill((*C_MOVE_SEL, 80))
-					self.screen.blit(s, (rx, ry))
+					pal = self._palette(ui)
+					s = _alpha_surf(cs, cs)
+					s.fill((*pal["accent_lite"], 50))
+					pygame.draw.rect(s, (*pal["accent_lite"], 160), (0, 0, cs, cs), 3)
+					target.blit(s, (rx, ry))
 
-				# 攻击范围（选中后轻微红色）
+				# 攻击范围
 				if (cx, cy) in ui.attack_hints and (cx, cy) not in ui.move_hints:
-					s = pygame.Surface((cs, cs), pygame.SRCALPHA)
-					s.fill((*C_ATK_HINT, 25))
-					self.screen.blit(s, (rx, ry))
+					s = _alpha_surf(cs, cs)
+					s.fill((*C_ATK_HINT, 22))
+					pygame.draw.rect(s, (*C_ATK_HINT, 55), (0, 0, cs, cs), 1)
+					target.blit(s, (rx, ry))
 
-				pygame.draw.rect(self.screen, C_GRID, rect, 1)
+				pygame.draw.rect(target, C_GRID, rect, 1)
 
 				# 本阵标签
 				if cfg.is_base(cx, cy):
 					owner = cfg.base_owner(cx, cy)
-					lbl   = "红阵" if owner == FACTION_RED else ("灾阵" if owner == FACTION_DIS else "本阵")
-					col   = C_RED   if owner == FACTION_RED else (C_DIS   if owner == FACTION_DIS else C_GOLD)
-					fkey  = "small" if cs >= 80 else "tiny"
-					self._text(rx + cs // 2, ry + cs - 12, lbl, self.fonts[fkey], col, center=True)
+					lbl   = "红阵" if owner == FACTION_RED else "灾阵"
+					col   = C_RED if owner == FACTION_RED else C_DIS
+					fkey  = "small" if cs >= 76 else "tiny"
+					self._text_on(target, rx + cs // 2, ry + cs - 13, lbl,
+						self.fonts[fkey], col, center=True)
 					bs = game.base_states.get((cx, cy))
 					if bs and bs.occupier:
 						fc  = C_OCCUPY_RED if bs.occupier == FACTION_RED else C_OCCUPY_DIS
-						tag = ("红" if bs.occupier == FACTION_RED else "灾") + f"·{bs.occupy_count}/2"
-						self._text(rx + cs // 2, ry + 8, tag, self.fonts["tiny"], fc, center=True)
+						tag = ("红" if bs.occupier == FACTION_RED else "灾") + f" {bs.occupy_count}/2"
+						self._text_on(target, rx + cs // 2, ry + 9, tag,
+							self.fonts["tiny"], fc, center=True)
 
-				# 地形标签
+				# 地形标签（左下小字 + 图标）
 				if terrain == "trench":
-					self._text(rx + 3, ry + cs - 12, "壕", self.fonts["tiny"], (140, 170, 220))
+					self._text_on(target, rx + 4, ry + cs - 13, "壕",
+						self.fonts["tiny"], (160, 190, 255))
 				elif terrain == "high":
-					self._text(rx + 3, ry + cs - 12, "高", self.fonts["tiny"], (220, 190, 80))
+					self._text_on(target, rx + 4, ry + cs - 13, "高",
+						self.fonts["tiny"], (255, 210, 80))
 
 				# 棋子
-				self._draw_units_in_cell(game.units_at(cx, cy), rx, ry, game, ui, anim, cs)
+				self._draw_units_in_cell(
+					game.units_at(cx, cy), rx, ry, game, ui, anim, cs, target)
 
-	def _draw_units_in_cell(self, units, rx, ry, game, ui, anim, cs):
+	def _draw_units_in_cell(self, units, rx, ry, game, ui, anim, cs, target=None):
+		if target is None:
+			target = self.screen
 		if not units:
 			return
 		n = len(units)
 		for i, u in enumerate(units):
-			# 拖拽中的棋子不在原格绘制（改为跟随鼠标）
 			if u.uid == ui.dragging_uid:
-				# 画一个半透明轮廓表示原始位置
+				# 原位置幽灵
 				scx = rx + cs // 2
 				scy = ry + cs // 2 - 5
 				r   = max(8, int(18 * cs / 110))
-				ghost = pygame.Surface((r*2+4, r*2+4), pygame.SRCALPHA)
-				pygame.draw.circle(ghost, (*C_GHOST, 60), (r+2, r+2), r)
-				pygame.draw.circle(ghost, (*C_WHITE, 80), (r+2, r+2), r, 2)
-				self.screen.blit(ghost, (scx - r - 2, scy - r - 2))
+				ghost = _alpha_surf(r * 2 + 4, r * 2 + 4)
+				pygame.draw.circle(ghost, (*C_GHOST, 50), (r + 2, r + 2), r)
+				pygame.draw.circle(ghost, (*C_WHITE, 70), (r + 2, r + 2), r, 2)
+				target.blit(ghost, (scx - r - 2, scy - r - 2))
 				continue
 
-			# 动画视觉位置
 			if anim and anim.is_playing:
 				vgx, vgy = anim.get_vpos(u.uid, u.x, u.y)
 				scx = int(game.cfg.board_offset_x + vgx * cs + cs // 2)
@@ -131,22 +224,30 @@ class Renderer:
 				scx = rx + cs // 2 + int(ox2)
 				scy = ry + cs // 2 - 5
 
-			self._draw_single_unit(u, scx, scy, game, ui, anim, cs)
+			self._draw_single_unit(u, scx, scy, game, ui, anim, cs, target)
 
-			# HP 条
+			# HP 条（底部）
 			bar_w = cs - 14
 			bar_x = rx + 7
 			bar_y = ry + cs - 9 - i * 7
 			hp_r  = u.hp / max(u.max_hp, 1)
-			pygame.draw.rect(self.screen, C_DARK_GRAY, (bar_x, bar_y, bar_w, 4))
-			pygame.draw.rect(self.screen, C_HP_GREEN if hp_r > 0.4 else C_HP_RED,
-				(bar_x, bar_y, int(bar_w * hp_r), 4))
+			pygame.draw.rect(target, C_DARK_GRAY, (bar_x, bar_y, bar_w, 4))
+			bar_col = C_HP_GREEN if hp_r > 0.45 else ((200, 160, 40) if hp_r > 0.2 else C_HP_RED)
+			pygame.draw.rect(target, bar_col,
+				(bar_x, bar_y, max(1, int(bar_w * hp_r)), 4))
 
-	def _draw_single_unit(self, u, scx, scy, game, ui, anim, cs):
+	def _draw_single_unit(self, u, scx, scy, game, ui, anim, cs, target=None):
+		if target is None:
+			target = self.screen
 		scale  = cs / 110
 		radius = max(8, int((24 if u.level >= 3 else (20 if u.level == 2 else 16)) * scale))
 
 		selected = (u.uid == ui.selected_uid)
+		is_cur_faction = (
+			(ui.phase in ("p1_plan", "p1_done") and u.faction == FACTION_RED)
+			or (ui.phase == "p2_plan" and u.faction == FACTION_DIS)
+		)
+
 		if u.is_embryo:
 			color = C_EMBYO
 		elif u.faction == FACTION_RED:
@@ -154,7 +255,6 @@ class Renderer:
 		else:
 			color = C_DIS_LITE if selected else C_DIS
 
-		# 死亡淡出
 		dead_a = anim.dead_alpha(u.uid) if anim else (0 if u.dead else 255)
 		if dead_a == 0:
 			return
@@ -164,80 +264,121 @@ class Renderer:
 		if flash > 0:
 			color = _lerp_color(color, (255, 255, 255), flash)
 
-		if selected:
-			pygame.draw.circle(self.screen, C_SEL, (scx, scy), radius + 5, 3)
+		# 脉冲光晕（当前操控方且未死亡）
+		if is_cur_faction and not u.dead and not (anim and anim.is_playing):
+			pulse = 0.5 + 0.5 * math.sin(self._pulse_t + u.uid * 0.7)
+			halo_r = radius + int(6 * pulse)
+			halo_a = int(40 * pulse)
+			halo = _alpha_surf(halo_r * 2 + 4, halo_r * 2 + 4)
+			hc = C_RED if u.faction == FACTION_RED else C_DIS
+			pygame.draw.circle(halo, (*hc, halo_a), (halo_r + 2, halo_r + 2), halo_r)
+			target.blit(halo, (scx - halo_r - 2, scy - halo_r - 2))
 
-		surf = pygame.Surface((radius * 2 + 2, radius * 2 + 2), pygame.SRCALPHA)
+		# 选中环（双层）
+		if selected:
+			pygame.draw.circle(target, C_SEL, (scx, scy), radius + 7, 1)
+			pygame.draw.circle(target, C_WHITE, (scx, scy), radius + 4, 2)
+
+		# 棋子主体
+		surf = _alpha_surf(radius * 2 + 2, radius * 2 + 2)
 		pygame.draw.circle(surf, (*color, dead_a), (radius + 1, radius + 1), radius)
+		# 高光
+		hl_col = _lerp_color(color, (255, 255, 255), 0.4)
+		pygame.draw.circle(surf, (*hl_col, dead_a // 2),
+			(radius + 1 - radius // 4, radius + 1 - radius // 4), radius // 3)
 		pygame.draw.circle(surf, (*C_WHITE, dead_a), (radius + 1, radius + 1), radius, 2)
-		self.screen.blit(surf, (scx - radius - 1, scy - radius - 1))
+		target.blit(surf, (scx - radius - 1, scy - radius - 1))
 
 		# 兵种名
-		fkey = "unit" if cs >= 80 else "tiny"
-		self._text(scx, scy - 4, u.name[:2], self.fonts[fkey], C_WHITE, center=True)
+		fkey = "unit" if cs >= 76 else "tiny"
+		self._text_on(target, scx, scy - 3, u.name[:2], self.fonts[fkey], C_WHITE, center=True)
 
 		# 等级点
 		for lv in range(u.level):
-			pygame.draw.circle(self.screen, C_GOLD,
-				(scx - (u.level - 1) * 4 + lv * 8, scy + radius - 4), 2)
+			pygame.draw.circle(target, C_GOLD,
+				(scx - (u.level - 1) * 4 + lv * 8, scy + radius - 3), 2)
 
 		# 行动图标
 		icon = {ACT_DEFEND: "🛡", ACT_OCCUPY: "🚩", ACT_MAKE: "🐣"}.get(u.planned_action)
 		if icon:
-			self._text(scx + radius, scy - radius, icon, self.fonts["tiny"], C_GOLD)
+			self._text_on(target, scx + radius - 2, scy - radius + 2, icon,
+				self.fonts["tiny"], C_GOLD)
+
+		# 进化可用提示（金色星形环）
+		if hasattr(u, "_pending_evo") or hasattr(u, "_pending_evo3"):
+			pulse2 = 0.5 + 0.5 * math.sin(self._pulse_t * 1.8 + u.uid)
+			evo_r  = radius + 10
+			evo_a  = int(120 * pulse2)
+			evo_s  = _alpha_surf(evo_r * 2 + 4, evo_r * 2 + 4)
+			pygame.draw.circle(evo_s, (*C_GOLD, evo_a), (evo_r + 2, evo_r + 2), evo_r, 2)
+			target.blit(evo_s, (scx - evo_r - 2, scy - evo_r - 2))
 
 	# ──────────────────── 规划覆盖层 ─────────────────
 
 	def _draw_plan_overlays(self, game, ui):
-		"""规划阶段：所有单位的移动/攻击预览指示（结算前保留）"""
 		if ui.phase not in ("p1_plan", "p2_plan", "p1_done"):
 			return
 		cfg = game.cfg
+		pal = self._palette(ui)
 
 		for u in game.alive_units():
-			if u.is_embryo:
+			if u.is_embryo or u.uid == ui.dragging_uid:
 				continue
-			if u.uid == ui.dragging_uid:
-				continue  # 正在拖拽时跳过
 			ux, uy = cfg.cell_center(u.x, u.y)
 
-			# ── 移动预览：半透明箭头线 ──────────────
+			# 移动预览箭头
 			if u.planned_dir != DIR_NONE:
 				dx, dy = u.planned_dir
 				tx, ty = cfg.cell_center(u.x + dx, u.y + dy)
-				# 虚线
-				self._draw_dashed_line(ux, uy - 5, tx, ty - 5, C_MOVE_SEL, 80)
-				# 目的地幽灵
+				# 线
+				self._draw_dashed_line(ux, uy - 5, tx, ty - 5, pal["accent"], 100)
+				# 箭头头
+				self._draw_arrow_head(tx, ty - 5, ux, uy - 5, pal["accent"], 80)
+				# 幽灵棋子
 				radius = max(6, int(14 * cfg.cell_size / 110))
-				gs = pygame.Surface((radius * 2 + 2, radius * 2 + 2), pygame.SRCALPHA)
-				fc = C_RED if u.faction == FACTION_RED else C_DIS
-				pygame.draw.circle(gs, (*fc, 70), (radius + 1, radius + 1), radius)
-				pygame.draw.circle(gs, (*C_WHITE, 100), (radius + 1, radius + 1), radius, 1)
-				self.screen.blit(gs, (tx - radius - 1, ty - radius - 6))
+				gs2 = _alpha_surf(radius * 2 + 2, radius * 2 + 2)
+				fc  = C_RED if u.faction == FACTION_RED else C_DIS
+				pygame.draw.circle(gs2, (*fc, 55), (radius + 1, radius + 1), radius)
+				pygame.draw.circle(gs2, (*C_WHITE, 80), (radius + 1, radius + 1), radius, 1)
+				self.screen.blit(gs2, (tx - radius - 1, ty - radius - 6))
 
-			# ── 攻击预览：自动攻击目标红虚线 ──────────
-			t = game.predict_attack_target(u)
-			if t:
-				tx, ty = cfg.cell_center(t.x, t.y)
-				self._draw_dashed_line(ux, uy - 5, tx, ty - 5, C_ATK_PREV, 60, dash=4)
+			# 自动攻击预测（红虚线，只显示当前操控方）
+			cur_faction = FACTION_RED if ui.phase in ("p1_plan", "p1_done") else FACTION_DIS
+			if u.faction == cur_faction:
+				t = game.predict_attack_target(u)
+				if t:
+					tx2, ty2 = cfg.cell_center(t.x, t.y)
+					self._draw_dashed_line(ux, uy - 5, tx2, ty2 - 5, C_ATK_PREV, 70, dash=4)
+					self._draw_arrow_head(tx2, ty2 - 5, ux, uy - 5, C_ATK_PREV, 60)
+
+	def _draw_arrow_head(self, tip_x, tip_y, from_x, from_y, color, alpha, size=7):
+		dx, dy = tip_x - from_x, tip_y - from_y
+		dist   = math.hypot(dx, dy)
+		if dist < 0.1:
+			return
+		ux, uy = dx / dist, dy / dist
+		px, py = -uy, ux
+		p1 = (tip_x, tip_y)
+		p2 = (tip_x - ux * size + px * (size * 0.5), tip_y - uy * size + py * (size * 0.5))
+		p3 = (tip_x - ux * size - px * (size * 0.5), tip_y - uy * size - py * (size * 0.5))
+		s = _alpha_surf(self.screen.get_width(), self.screen.get_height())
+		pygame.draw.polygon(s, (*color, alpha), [p1, p2, p3])
+		self.screen.blit(s, (0, 0))
 
 	def _draw_dashed_line(self, x1, y1, x2, y2, color, alpha, dash=6):
-		"""绘制虚线"""
-		import math
 		dx, dy = x2 - x1, y2 - y1
 		length = math.hypot(dx, dy)
 		if length == 0:
 			return
-		steps = int(length / (dash * 2))
+		steps = max(1, int(length / (dash * 2)))
+		surf  = _alpha_surf(self.screen.get_width(), self.screen.get_height())
 		for i in range(steps):
 			t0 = i * dash * 2 / length
-			t1 = (i * dash * 2 + dash) / length
-			t1 = min(t1, 1.0)
+			t1 = min(1.0, (i * dash * 2 + dash) / length)
 			ax, ay = int(x1 + dx * t0), int(y1 + dy * t0)
 			bx, by = int(x1 + dx * t1), int(y1 + dy * t1)
-			s = pygame.Surface((abs(bx - ax) + 2, abs(by - ay) + 2), pygame.SRCALPHA)
-			pygame.draw.line(s, (*color, alpha), (0, 0), (abs(bx - ax), abs(by - ay)), 2)
-			self.screen.blit(s, (min(ax, bx), min(ay, by)))
+			pygame.draw.line(surf, (*color, alpha), (ax, ay), (bx, by), 2)
+		self.screen.blit(surf, (0, 0))
 
 	# ──────────────────── 拖拽棋子 ───────────────────
 
@@ -254,28 +395,34 @@ class Renderer:
 		radius = max(8, int((24 if u.level >= 3 else (20 if u.level == 2 else 16)) * scale))
 		color  = C_RED_LITE if u.faction == FACTION_RED else C_DIS_LITE
 
-		# 投影（简单阴影）
-		shadow = pygame.Surface((radius * 2 + 8, radius * 2 + 8), pygame.SRCALPHA)
-		pygame.draw.circle(shadow, (0, 0, 0, 70), (radius + 4, radius + 8), radius)
-		self.screen.blit(shadow, (mx - radius - 4, my - radius - 4 + 6))
+		# 投影
+		shadow = _alpha_surf(radius * 2 + 14, radius * 2 + 14)
+		pygame.draw.circle(shadow, (0, 0, 0, 60), (radius + 7, radius + 10), radius)
+		self.screen.blit(shadow, (mx - radius - 7, my - radius - 4))
 
-		# 棋子主体
-		surf = pygame.Surface((radius * 2 + 2, radius * 2 + 2), pygame.SRCALPHA)
-		pygame.draw.circle(surf, (*color, 230), (radius + 1, radius + 1), radius)
-		pygame.draw.circle(surf, (*C_WHITE, 230), (radius + 1, radius + 1), radius, 2)
+		# 光环（拖拽时强调）
+		halo = _alpha_surf(radius * 2 + 22, radius * 2 + 22)
+		pygame.draw.circle(halo, (*color, 50), (radius + 11, radius + 11), radius + 6)
+		self.screen.blit(halo, (mx - radius - 11, my - radius - 11))
+
+		# 主体
+		surf = _alpha_surf(radius * 2 + 2, radius * 2 + 2)
+		pygame.draw.circle(surf, (*color, 235), (radius + 1, radius + 1), radius)
+		pygame.draw.circle(surf, (*C_WHITE, 235), (radius + 1, radius + 1), radius, 2)
 		self.screen.blit(surf, (mx - radius - 1, my - radius - 1))
 		self._text(mx, my - 2, u.name[:2], self.fonts["unit"], C_WHITE, center=True)
 
-		# 目标格高亮
+		# 落点高亮
 		cell = game.cfg.screen_to_cell(mx, my)
 		if cell and cell in ui.move_hints:
 			cx, cy = cell
 			rx = cfg.board_offset_x + cx * cs
 			ry = cfg.board_offset_y + cy * cs
-			hl = pygame.Surface((cs, cs), pygame.SRCALPHA)
-			hl.fill((*C_MOVE_SEL, 100))
+			pal = self._palette(ui)
+			hl = _alpha_surf(cs, cs)
+			hl.fill((*pal["accent_lite"], 80))
 			self.screen.blit(hl, (rx, ry))
-			pygame.draw.rect(self.screen, C_MOVE_SEL,
+			pygame.draw.rect(self.screen, pal["accent_lite"],
 				pygame.Rect(rx, ry, cs, cs), 2)
 
 	# ──────────────────── 伤害数字 ───────────────────
@@ -287,188 +434,356 @@ class Renderer:
 		cfg = game.cfg
 		for tag in anim.damage_tags:
 			scx, scy = cfg.cell_center(tag.gx, tag.gy)
-			scy += y_off - 20
-			text = f"-{tag.amount}"
-			surf = self.fonts["bold"].render(text, True, (255, 80, 60))
+			scy += y_off - 22
+			if tag.is_heal:
+				col  = (80, 220, 100)
+				text = f"+{tag.amount}"
+			else:
+				col  = (255, 80, 50) if tag.amount >= 3 else (230, 140, 80)
+				text = f"-{tag.amount}"
+			fkey = "bold" if tag.amount >= 3 else "small"
+			surf = self.fonts[fkey].render(text, True, col)
 			surf.set_alpha(alpha)
+			# 描边
+			out = self.fonts[fkey].render(text, True, (0, 0, 0))
+			out.set_alpha(alpha // 2)
 			rect = surf.get_rect(center=(scx, scy))
+			self.screen.blit(out, (rect.x + 1, rect.y + 1))
 			self.screen.blit(surf, rect)
+
+	# ──────────────────── 远程抛射体 ───────────────────
+
+	def _draw_projectiles(self, game, anim):
+		from animator import AnimPhase
+		if anim.phase not in (AnimPhase.RANGED,):
+			return
+		cfg = game.cfg
+		cs  = cfg.cell_size
+
+		for p in anim.projectiles:
+			if p.hit:
+				continue
+			t = p.progress
+			if p.is_cannon:
+				# 炮弹：抛物线弧度，较大圆形，橙黄色
+				px_s = cfg.board_offset_x + p.sx * cs + cs // 2
+				py_s = cfg.board_offset_y + p.sy * cs + cs // 2 - 5
+				px_t = cfg.board_offset_x + p.tx * cs + cs // 2
+				py_t = cfg.board_offset_y + p.ty * cs + cs // 2 - 5
+				cx   = px_s + (px_t - px_s) * t
+				# 抛物线上弧
+				arc  = -math.sin(t * math.pi) * cs * 1.2
+				cy   = py_s + (py_t - py_s) * t + arc
+				r    = max(5, int(7 * (1.0 - abs(t - 0.5) * 0.5)))
+				# 外光晕
+				halo = _alpha_surf(r * 4, r * 4)
+				pygame.draw.circle(halo, (255, 140, 40, 60), (r * 2, r * 2), r * 2)
+				self.screen.blit(halo, (int(cx) - r * 2, int(cy) - r * 2))
+				pygame.draw.circle(self.screen, (255, 200, 60), (int(cx), int(cy)), r)
+				pygame.draw.circle(self.screen, (255, 255, 180), (int(cx), int(cy)), max(2, r // 2))
+			else:
+				# 弩箭：直线，细长，白蓝色，带尾迹
+				px_s = cfg.board_offset_x + p.sx * cs + cs // 2
+				py_s = cfg.board_offset_y + p.sy * cs + cs // 2 - 5
+				px_t = cfg.board_offset_x + p.tx * cs + cs // 2
+				py_t = cfg.board_offset_y + p.ty * cs + cs // 2 - 5
+				cx   = px_s + (px_t - px_s) * t
+				cy   = py_s + (py_t - py_s) * t
+				# 箭头方向
+				dx, dy = px_t - px_s, py_t - py_s
+				dist   = math.hypot(dx, dy)
+				if dist > 0.1:
+					ux, uy = dx / dist, dy / dist
+					# 尾迹（3段渐淡）
+					tail_len = cs * 0.6
+					for i, (frac, alpha) in enumerate([(0.7, 80), (0.4, 40), (0.2, 15)]):
+						bx = cx - ux * tail_len * frac
+						by = cy - uy * tail_len * frac
+						surf = _alpha_surf(self.screen.get_width(), self.screen.get_height())
+						pygame.draw.line(surf, (180, 220, 255, alpha),
+							(int(bx), int(by)), (int(cx), int(cy)), 2)
+						self.screen.blit(surf, (0, 0))
+					# 箭体
+					tip_x = int(cx + ux * 8)
+					tip_y = int(cy + uy * 8)
+					tail_x = int(cx - ux * 12)
+					tail_y = int(cy - uy * 12)
+					pygame.draw.line(self.screen, (220, 240, 255), (tail_x, tail_y), (tip_x, tip_y), 2)
+					pygame.draw.circle(self.screen, (255, 255, 255), (tip_x, tip_y), 2)
 
 	# ──────────────────── 左侧面板 ───────────────────
 
-	def _draw_left_panel(self, game, ui):
+	def _draw_left_panel(self, game, ui, pal):
 		cfg = game.cfg
 		x, y = 6, cfg.board_offset_y
 		w    = cfg.board_offset_x - 12
 		h    = cfg.grid_size * cfg.cell_size
-		pygame.draw.rect(self.screen, C_PANEL_BG, (x, y, w, h))
-		pygame.draw.rect(self.screen, C_PANEL_BDR, (x, y, w, h), 1)
 
-		self._text(x + w // 2, y + 13, f"第 {game.turn} 回合", self.fonts["bold"], C_GOLD, center=True)
-		self._text(x + w // 2, y + 30, "地形", self.fonts["small"], C_WHITE, center=True)
-		for i, line in enumerate(["壕(4,4)：驻守减伤1", "高(0,4)(8,4)：攻击+1"]):
-			self._text(x + 5, y + 47 + i * 13, line, self.fonts["tiny"], C_GRAY)
+		pygame.draw.rect(self.screen, pal["panel_bg"], (x, y, w, h))
+		# 阶段强调边框（2px + 顶部彩条）
+		pygame.draw.rect(self.screen, pal["panel_bdr"], (x, y, w, h), 2)
+		pygame.draw.rect(self.screen, pal["accent"], (x, y, w, 4))
 
+		# 回合标题
+		self._text(x + w // 2, y + 16, f"第 {game.turn} 回合", self.fonts["bold"], C_GOLD, center=True)
+
+		# 地形提示（紧凑两行）
+		self._text(x + 4, y + 34, "地形规则", self.fonts["tiny"], C_GRAY)
+		self._text(x + 4, y + 47, "壕(4,4) 驻守-1伤", self.fonts["tiny"], (160, 190, 255))
+		self._text(x + 4, y + 60, "高(0,4)(8,4) 攻+1", self.fonts["tiny"], (255, 210, 80))
+
+		# 营地等级
 		camp_names = {1: "废墟据点", 2: "简易兵营", 3: "前线营地"}
-		self._text(x + 5, y + 86, "营地", self.fonts["tiny"], C_GRAY)
-		self._text(x + 5, y + 99, camp_names[game.camp_level], self.fonts["small"], C_GOLD)
+		pygame.draw.line(self.screen, pal["panel_bdr"], (x + 4, y + 76), (x + w - 4, y + 76), 1)
+		self._text(x + 4, y + 80, "营地", self.fonts["tiny"], C_GRAY)
+		self._text(x + 4, y + 93, camp_names[game.camp_level], self.fonts["small"], C_GOLD)
 
-		py = y + 118
-		self._text(x + 5, py, "本阵占领", self.fonts["tiny"], C_GRAY)
-		py += 13
+		# 本阵状态
+		pygame.draw.line(self.screen, pal["panel_bdr"], (x + 4, y + 112), (x + w - 4, y + 112), 1)
+		self._text(x + 4, y + 116, "本阵占领", self.fonts["tiny"], C_GRAY)
+		py = y + 129
 		for bpos, bstate in game.base_states.items():
-			lbl = ("红阵" if bstate.owner == FACTION_RED
-				else "灾阵" if bstate.owner == FACTION_DIS else "共享")
+			lbl = "红阵" if bstate.owner == FACTION_RED else "灾阵"
 			if bstate.occupier:
-				oc = "红" if bstate.occupier == FACTION_RED else "灾"
-				fc = C_OCCUPY_RED if bstate.occupier == FACTION_RED else C_OCCUPY_DIS
-				self._text(x + 5, py, f"{lbl}：{oc}方 {bstate.occupy_count}/2", self.fonts["tiny"], fc)
+				oc  = "红" if bstate.occupier == FACTION_RED else "灾"
+				fc  = C_OCCUPY_RED if bstate.occupier == FACTION_RED else C_OCCUPY_DIS
+				self._text(x + 4, py, f"{lbl}:{oc} {bstate.occupy_count}/2", self.fonts["tiny"], fc)
 			else:
-				self._text(x + 5, py, f"{lbl}：无", self.fonts["tiny"], C_GRAY)
-			py += 13
+				self._text(x + 4, py, f"{lbl}: —", self.fonts["tiny"], C_GRAY)
+			py += 14
 
 		# 选中单位信息卡
 		if ui.selected_uid:
 			u = game.get_unit_by_uid(ui.selected_uid)
 			if u and not u.dead:
-				self._draw_unit_card(x + 4, py + 4, w - 8, u, game)
+				pygame.draw.line(self.screen, pal["panel_bdr"],
+					(x + 4, py + 4), (x + w - 4, py + 4), 1)
+				self._draw_unit_card(x + 4, py + 8, w - 8, u, game, pal)
 
-		# 行动按钮（在面板底部）
+		# 行动按钮
 		for act, label, rect in ui.act_btn_rects:
 			u = game.get_unit_by_uid(ui.selected_uid)
 			active = (u and u.planned_action == act)
-			bg = (60, 44, 14) if active else (30, 20, 12)
-			bd = C_GOLD if active else C_PANEL_BDR
-			pygame.draw.rect(self.screen, bg, rect, border_radius=4)
-			pygame.draw.rect(self.screen, bd, rect, 2, border_radius=4)
-			self._text(rect.x + 7, rect.centery, label,
-				self.fonts["small"], C_GOLD if active else C_WHITE)
+			# 根据动作类型着色
+			if act == ACT_DEFEND:
+				btn_accent = (60, 110, 200)
+			elif act == ACT_OCCUPY:
+				btn_accent = (160, 130, 40)
+			elif act == ACT_MAKE:
+				btn_accent = (80, 160, 80)
+			else:
+				btn_accent = pal["accent"]
+			bg = (*btn_accent, 70) if active else (30, 20, 12)
+			if active:
+				pygame.draw.rect(self.screen, btn_accent, rect, border_radius=5)
+			else:
+				pygame.draw.rect(self.screen, bg[:3], rect, border_radius=5)
+			bd = btn_accent if active else pal["panel_bdr"]
+			pygame.draw.rect(self.screen, bd, rect, 2, border_radius=5)
+			txt_col = C_WHITE if active else C_GRAY
+			self._text(rect.x + 8, rect.centery, label, self.fonts["small"], txt_col)
+			if active:
+				# 激活状态小勾
+				self._text(rect.right - 16, rect.centery, "✓", self.fonts["small"], C_WHITE)
 
-	def _draw_unit_card(self, x, y, w, u, game):
+	def _draw_unit_card(self, x, y, w, u, game, pal):
 		fc = C_RED if u.faction == FACTION_RED else C_DIS
-		available_h = min(130, game.cfg.grid_size * game.cfg.cell_size - (y - game.cfg.board_offset_y) - 2)
+		available_h = min(135, game.cfg.grid_size * game.cfg.cell_size - (y - game.cfg.board_offset_y) - 2)
 		if available_h < 40:
 			return
 		pygame.draw.rect(self.screen, (34, 22, 13), (x, y, w, available_h), border_radius=4)
 		pygame.draw.rect(self.screen, fc, (x, y, w, available_h), 1, border_radius=4)
-		self._text(x + 5, y + 6,  u.name, self.fonts["bold"], fc)
-		self._text(x + 5, y + 22, f"HP {u.hp}/{u.max_hp}", self.fonts["small"], C_WHITE)
-		self._text(x + 5, y + 37, f"ATK {game.effective_atk(u)}  SPD {game.effective_spd(u)}",
-			self.fonts["small"], C_WHITE)
-		if available_h > 70:
-			self._text(x + 5, y + 52, f"特：{u.trait}", self.fonts["tiny"], C_GOLD)
-			self._text(x + 5, y + 66, f"杀：{u.kills}", self.fonts["tiny"], C_GRAY)
+		# 名称与等级
+		level_dots = "●" * u.level
+		self._text(x + 5, y + 6, u.name, self.fonts["bold"], fc)
+		self._text(x + w - 5 - len(level_dots) * 8, y + 6, level_dots, self.fonts["tiny"], C_GOLD)
+		# 数值行
+		self._text(x + 5, y + 22, f"HP  {u.hp} / {u.max_hp}", self.fonts["small"], C_WHITE)
+		terrain = game.cfg.terrain_at(u.x, u.y)
+		atk_eff = game.effective_atk(u)
+		atk_str = f"ATK {atk_eff}" + (" ▲" if terrain == "high" else "")
+		self._text(x + 5, y + 37, atk_str, self.fonts["small"],
+			(255, 210, 80) if terrain == "high" else C_WHITE)
+		self._text(x + 5, y + 52, f"SPD {u.spd}", self.fonts["small"], C_WHITE)
+		if available_h > 75:
+			self._text(x + 5, y + 67, f"特：{u.trait}", self.fonts["tiny"], C_GOLD)
+			self._text(x + 5, y + 81, f"经验：{u.kills}",
+				self.fonts["tiny"], C_GOLD if u.kills >= 1 else C_GRAY)
 		if hasattr(u, "_pending_evo") or hasattr(u, "_pending_evo3"):
 			self._text(x + 5, y + available_h - 14, "⬆ 可进化！", self.fonts["tiny"], C_GOLD)
 
 	# ──────────────────── 右侧面板 ───────────────────
 
-	def _draw_right_panel(self, game, ui):
+	def _draw_right_panel(self, game, ui, pal):
 		cfg = game.cfg
 		x   = cfg.board_offset_x + cfg.grid_size * cfg.cell_size + 8
 		y   = cfg.board_offset_y
 		w   = cfg.panel_width
 		h   = cfg.grid_size * cfg.cell_size
-		pygame.draw.rect(self.screen, C_PANEL_BG, (x, y, w, h))
-		pygame.draw.rect(self.screen, C_PANEL_BDR, (x, y, w, h), 1)
-		self._text(x + w // 2, y + 12, "单位列表", self.fonts["bold"], C_GOLD, center=True)
 
-		ry = y + 28
-		for faction, label, color in [(FACTION_RED, "★ 红方", C_RED), (FACTION_DIS, "☠ 灾方", C_DIS)]:
-			self._text(x + 5, ry, label, self.fonts["small"], color)
-			ry += 15
+		pygame.draw.rect(self.screen, pal["panel_bg"], (x, y, w, h))
+		pygame.draw.rect(self.screen, pal["panel_bdr"], (x, y, w, h), 2)
+		pygame.draw.rect(self.screen, pal["accent"], (x, y, w, 4))
+
+		self._text(x + w // 2, y + 16, "单位列表", self.fonts["bold"], C_GOLD, center=True)
+
+		ry = y + 32
+		for faction, label, color in [
+			(FACTION_RED, "★ 红方", C_RED),
+			(FACTION_DIS, "☠ 灾方", C_DIS),
+		]:
+			# 阵营分隔标题
+			pygame.draw.rect(self.screen, (*color, 40)[:3], (x + 2, ry, w - 4, 16),
+				border_radius=2)
+			self._text(x + 6, ry + 2, label, self.fonts["small"], color)
+			ry += 18
 			for u in game.faction_units(faction):
 				sel  = (ui.selected_uid == u.uid)
-				line = f"{'▶' if sel else ' '}{u.name}  {u.hp}/{u.max_hp}HP"
-				self._text(x + 5, ry, line, self.fonts["tiny"],
-					C_GOLD if sel else C_WHITE)
+				bg_col = (50, 32, 14) if sel else None
+				if sel:
+					pygame.draw.rect(self.screen, bg_col,
+						(x + 2, ry - 1, w - 4, 14), border_radius=2)
+				name_col = C_GOLD if sel else C_WHITE
+				hp_col   = C_HP_GREEN if u.hp / u.max_hp > 0.45 else (
+					(200, 160, 40) if u.hp / u.max_hp > 0.2 else C_HP_RED)
+				# 等级 → 名字 → HP
+				lvl_str = "Ⅲ" if u.level == 3 else ("Ⅱ" if u.level == 2 else "Ⅰ")
+				self._text(x + 5, ry, f"{lvl_str} {u.name}", self.fonts["tiny"], name_col)
+				self._text(x + w - 5, ry, f"{u.hp}/{u.max_hp}",
+					self.fonts["tiny"], hp_col, center=False)
 				if hasattr(u, "_pending_evo") or hasattr(u, "_pending_evo3"):
-					self._text(x + w - 16, ry, "⬆", self.fonts["tiny"], C_GOLD)
-				ry += 13
-			ry += 4
+					self._text(x + w - 18, ry, "⬆", self.fonts["tiny"], C_GOLD)
+				ry += 14
+			ry += 5
 
-		log_top = y + h - 108
-		pygame.draw.line(self.screen, C_PANEL_BDR, (x, log_top), (x + w, log_top))
-		self._text(x + 4, log_top + 4, "战报", self.fonts["tiny"], C_GRAY)
-		for i, line in enumerate(game.log[-6:]):
-			col = C_WHITE if i == 5 else (100, 94, 86)
-			self._text(x + 4, log_top + 18 + i * 14, line[:24], self.fonts["tiny"], col)
+		# 战报
+		log_top = y + h - 116
+		pygame.draw.line(self.screen, pal["panel_bdr"], (x, log_top), (x + w, log_top))
+		self._text(x + 5, log_top + 4, "战  报", self.fonts["tiny"], C_GRAY)
+		recent = game.log[-7:]
+		for i, line in enumerate(recent):
+			age  = len(recent) - 1 - i
+			frac = 1.0 - age / max(len(recent) - 1, 1) * 0.65
+			col  = tuple(int(c * frac) for c in C_WHITE)
+			# 截断并显示
+			short = line if len(line) <= 22 else line[:21] + "…"
+			self._text(x + 5, log_top + 18 + i * 14, short, self.fonts["tiny"], col)
 
 	# ──────────────────── 底部操作栏 ─────────────────
 
-	def _draw_bottom_bar(self, game, ui):
+	def _draw_bottom_bar(self, game, ui, pal):
 		cfg = game.cfg
 		by  = cfg.board_offset_y + cfg.grid_size * cfg.cell_size + 6
 		bh  = 58
 		sw  = cfg.screen_w
-		pygame.draw.rect(self.screen, C_PANEL_BG, (0, by, sw, bh))
-		pygame.draw.line(self.screen, C_PANEL_BDR, (0, by), (sw, by))
 
-		phase_text = {
-			"p1_plan": "【红方规划】 拖拽棋子到目标格移动 | 左侧面板选择行动",
-			"p1_done": "【切换阵营】 请灾方接手，点击任意处继续",
-			"p2_plan": "【灾方规划】 拖拽棋子到目标格移动 | 左侧面板选择行动",
-			"animating": "【执行中…】",
-			"result":  "【结算完毕】 点击确认继续下一回合",
-			"game_over": "【游戏结束】 关闭窗口退出",
-		}.get(ui.phase, "")
-		self._text(12, by + 8, phase_text, self.fonts["small"], C_WHITE)
-		self._text(12, by + 28, "蓝色菱形 = 移动范围  虚线 = 计划路线  红虚线 = 预测攻击目标",
-			self.fonts["tiny"], C_GRAY)
+		pygame.draw.rect(self.screen, pal["panel_bg"], (0, by, sw, bh))
+		pygame.draw.line(self.screen, pal["panel_bdr"], (0, by), (sw, by), 2)
 
+		# 阶段文字
+		phase_lines = {
+			"p1_plan":    ("【红方规划】",    "拖拽棋子移动  •  左侧面板选择行动  •  红虚线 = 预测攻击目标"),
+			"p1_done":    ("【切换阵营 ▶】",  "请灾方接手  •  点击任意处继续"),
+			"p2_plan":    ("【灾方规划】",    "拖拽棋子移动  •  左侧面板选择行动  •  红虚线 = 预测攻击目标"),
+			"animating":  ("【执行中…】",     ""),
+			"result":     ("【结算完毕】",    "点击确认 / Enter 继续下一回合"),
+			"game_over":  ("【游戏结束】",    "关闭窗口退出"),
+		}
+		title, sub = phase_lines.get(ui.phase, ("", ""))
+		self._text(12, by + 7, title, self.fonts["bold"], pal["accent"])
+		if sub:
+			self._text(12, by + 28, sub, self.fonts["tiny"], C_GRAY)
+
+		# 确认按钮
 		btn = ui.confirm_btn_rect
 		labels = {
-			"p1_plan": ("确认规划", C_RED),
-			"p2_plan": ("确认规划", C_DIS),
-			"result":  ("下一回合", C_GOLD),
+			"p1_plan": ("确认规划  ▶", C_RED),
+			"p2_plan": ("确认规划  ▶", C_DIS),
+			"result":  ("下一回合  ▶", C_GOLD),
 		}
 		if ui.phase in labels and btn:
 			lbl, col = labels[ui.phase]
-			pygame.draw.rect(self.screen, col, btn, border_radius=7)
-			pygame.draw.rect(self.screen, C_WHITE, btn, 1, border_radius=7)
+			# 脉冲边框
+			pulse = 0.5 + 0.5 * math.sin(self._pulse_t * 1.4)
+			border_col = _lerp_color(col, C_WHITE, pulse * 0.4)
+			pygame.draw.rect(self.screen, col, btn, border_radius=8)
+			pygame.draw.rect(self.screen, border_col, btn, 2, border_radius=8)
 			self._text(btn.centerx, btn.centery, lbl, self.fonts["bold"], C_WHITE, center=True)
 
 	# ──────────────────── 进化对话框 ─────────────────
 
 	def _draw_evo_dialog(self, game, ui):
+		from unit import UNIT_TEMPLATES
 		cfg = game.cfg
 		n   = len(ui.evo_options)
 		dw  = 520
-		dh  = 58 + n * 84 + 28
+		dh  = 64 + n * 88 + 24
 		dx  = (cfg.screen_w - dw) // 2
 		dy  = (cfg.screen_h - dh) // 2
-		pygame.draw.rect(self.screen, (24, 15, 9), (dx, dy, dw, dh), border_radius=8)
-		pygame.draw.rect(self.screen, C_GOLD, (dx, dy, dw, dh), 2, border_radius=8)
+
+		# 背景遮罩
+		mask = _alpha_surf(cfg.screen_w, cfg.screen_h)
+		mask.fill((0, 0, 0, 140))
+		self.screen.blit(mask, (0, 0))
+
+		pygame.draw.rect(self.screen, (26, 16, 9), (dx, dy, dw, dh), border_radius=10)
+		pygame.draw.rect(self.screen, C_GOLD, (dx, dy, dw, dh), 2, border_radius=10)
+		pygame.draw.rect(self.screen, C_GOLD, (dx, dy, dw, 5), border_radius=10)
 
 		u = game.get_unit_by_uid(ui.evo_uid)
-		self._text(dx + dw // 2, dy + 18, f"✨ 进化选择：{u.name if u else '?'}",
+		self._text(dx + dw // 2, dy + 20, f"✨ 进化选择：{u.name if u else '?'}",
 			self.fonts["bold"], C_GOLD, center=True)
-		self._text(dx + dw // 2, dy + 38, "点击选择路线",
+		self._text(dx + dw // 2, dy + 42, "点击选择进化路线",
 			self.fonts["tiny"], C_GRAY, center=True)
 
 		for i, opt in enumerate(ui.evo_options):
-			oy2  = dy + 56 + i * 84
-			rect = pygame.Rect(dx + 22, oy2, dw - 44, 72)
+			oy2  = dy + 62 + i * 88
+			rect = pygame.Rect(dx + 20, oy2, dw - 40, 76)
 			hov  = (i == ui.evo_hover)
-			pygame.draw.rect(self.screen, (52, 34, 13) if hov else (34, 22, 10), rect, border_radius=6)
-			pygame.draw.rect(self.screen, C_GOLD if hov else C_PANEL_BDR, rect, 2, border_radius=6)
-			from unit import UNIT_TEMPLATES
-			tmpl  = UNIT_TEMPLATES.get(opt["name"], {})
-			route = "路线A（保守）" if i == 0 else "路线B（进化）"
-			header = f"{route} → {opt['name']}   HP:{tmpl.get('max_hp','?')} ATK:{tmpl.get('atk','?')} SPD:{tmpl.get('spd','?')}"
-			self._text(rect.x + 10, rect.y + 10, header, self.fonts["small"], C_WHITE)
-			self._text(rect.x + 10, rect.y + 30, f"特性：{tmpl.get('trait','?')}", self.fonts["small"], C_GOLD)
-			self._text(rect.x + 10, rect.y + 50, opt.get("desc",""), self.fonts["tiny"], C_GRAY)
+			bg   = (60, 40, 15) if hov else (36, 24, 11)
+			bd   = C_GOLD if hov else C_PANEL_BDR
+			pygame.draw.rect(self.screen, bg, rect, border_radius=7)
+			pygame.draw.rect(self.screen, bd, rect, 2, border_radius=7)
+
+			tmpl   = UNIT_TEMPLATES.get(opt["name"], {})
+			route  = "路线 A　保守强化" if i == 0 else "路线 B　特化进化"
+			rc     = C_GOLD if hov else C_GRAY
+			header = f"{route}  →  {opt['name']}"
+			self._text(rect.x + 12, rect.y + 9, header, self.fonts["small"],
+				C_WHITE if hov else C_GRAY)
+			stats = f"HP {tmpl.get('max_hp','?')}  ATK {tmpl.get('atk','?')}  SPD {tmpl.get('spd','?')}  特：{tmpl.get('trait','?')}"
+			self._text(rect.x + 12, rect.y + 30, stats, self.fonts["small"],
+				C_GOLD if hov else (160, 130, 60))
+			self._text(rect.x + 12, rect.y + 52, opt.get("desc", ""), self.fonts["tiny"],
+				(200, 200, 180) if hov else C_GRAY)
 
 	# ──────────────────── 阶段横幅 ───────────────────
 
 	def _draw_phase_banner(self, game, ui):
-		cfg  = game.cfg
+		cfg    = game.cfg
 		sw, sh = cfg.screen_w, cfg.screen_h
-		s = pygame.Surface((sw, 78), pygame.SRCALPHA)
-		s.fill((0, 0, 0, 185))
-		self.screen.blit(s, (0, sh // 2 - 39))
-		self._text(sw // 2, sh // 2, ui.banner_text, self.fonts["title"], C_GOLD, center=True)
+		pal    = self._palette(ui)
+
+		# 半透明遮罩
+		mask = _alpha_surf(sw, sh)
+		mask.fill((0, 0, 0, 175))
+		self.screen.blit(mask, (0, 0))
+
+		# 彩色横条
+		bar_h = 88
+		bar_y = sh // 2 - bar_h // 2
+		bar   = _alpha_surf(sw, bar_h)
+		bar.fill((*pal["panel_bg"], 230))
+		self.screen.blit(bar, (0, bar_y))
+		# 顶底边线
+		pygame.draw.line(self.screen, pal["accent"], (0, bar_y), (sw, bar_y), 2)
+		pygame.draw.line(self.screen, pal["accent"], (0, bar_y + bar_h), (sw, bar_y + bar_h), 2)
+
+		# 主文字
+		self._text(sw // 2, sh // 2 - 10, ui.banner_text, self.fonts["title"],
+			pal["accent_lite"], center=True)
+		self._text(sw // 2, sh // 2 + 22, "点击任意处 / 按键继续…",
+			self.fonts["small"], C_GRAY, center=True)
 
 	# ──────────────────── 工具 ───────────────────────
 
@@ -476,6 +791,11 @@ class Renderer:
 		surf = font.render(str(text), True, color)
 		rect = surf.get_rect(center=(x, y)) if center else surf.get_rect(topleft=(x, y))
 		self.screen.blit(surf, rect)
+
+	def _text_on(self, target, x, y, text, font, color, center=False):
+		surf = font.render(str(text), True, color)
+		rect = surf.get_rect(center=(x, y)) if center else surf.get_rect(topleft=(x, y))
+		target.blit(surf, rect)
 
 	def _wrap(self, text, mc):
 		lines = []

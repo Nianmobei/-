@@ -127,7 +127,7 @@ def main():
 
 		# 动画更新（每帧）
 		if ui.phase == "animating":
-			done = anim.update(dt)
+			done = anim.update(dt, game)
 			if done:
 				ui.phase = "result"
 				ui.queue_evolutions(game)

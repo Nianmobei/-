@@ -87,6 +87,8 @@ class GameState:
 		self.collapse_targets: dict = {}
 		self.log: list   = []
 		self._pre_pos: dict = {}
+		# 每回合攻击事件：list of (atk_uid, tgt_uid, is_ranged, is_collision)
+		self.last_attack_events: list = []
 
 	def setup(self):
 		pos_map = self.cfg.initial_positions()
@@ -138,6 +140,7 @@ class GameState:
 
 	def execute_turn(self):
 		log    = []
+		self.last_attack_events = []
 
 		self._pre_pos = {u.uid: (u.x, u.y) for u in self.alive_units()}
 
@@ -295,6 +298,8 @@ class GameState:
 					w.kills += 1
 					log.append(f"⭐ {w.name} 防住攻击！+1经验({w.kills})")
 				w._collision_partner = l.uid; l._collision_partner = w.uid
+				self.last_attack_events.append((w.uid, l.uid, False, True))
+				self.last_attack_events.append((l.uid, w.uid, False, True))
 			elif w_atk:
 				d = self._calc_damage(w, l, all_alive)
 				l.take_damage(d)
@@ -303,6 +308,7 @@ class GameState:
 					l.kills += 1
 					log.append(f"⭐ {l.name} 防住攻击！+1经验({l.kills})")
 				w._collision_partner = l.uid; l._collision_partner = w.uid
+				self.last_attack_events.append((w.uid, l.uid, False, True))
 			elif l_atk:
 				d = self._calc_damage(l, w, all_alive)
 				w.take_damage(d)
@@ -311,6 +317,7 @@ class GameState:
 					w.kills += 1
 					log.append(f"⭐ {w.name} 防住攻击！+1经验({w.kills})")
 				w._collision_partner = l.uid; l._collision_partner = w.uid
+				self.last_attack_events.append((l.uid, w.uid, False, True))
 			else:
 				log.append(f"🤝 碰撞双防：无伤害")
 			for u in (w, l):
@@ -361,9 +368,12 @@ class GameState:
 				target.pending_dmg += dmg
 				log.append(f"⚔️ 同时：{atk.name}↔{target.name}  互伤{dmg2}/{dmg}")
 				processed.add(pair)
+				self.last_attack_events.append((atk.uid, target.uid, atk.ranged, False))
+				self.last_attack_events.append((target.uid, atk.uid, target.ranged, False))
 			else:
 				target.pending_dmg += dmg
 				log.append(f"⚔️ {atk.name}({atk.faction[:3]}) → {target.name}  伤{dmg}")
+				self.last_attack_events.append((atk.uid, target.uid, atk.ranged, False))
 				# 非同速单向攻击：不锁定，慢速方稍后仍可攻击快速方
 			# 防住判定（dmg=0 但攻击有效）：防守方 +1 经验
 			if dmg == 0 and self.effective_atk(atk) > 0:
