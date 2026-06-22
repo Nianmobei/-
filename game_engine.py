@@ -151,7 +151,7 @@ class GameState:
 
 		self._pre_pos = {u.uid: (u.x, u.y) for u in self.alive_units()}
 
-		erode = self.effect_mgr.erode_cells()
+		erode = self.effect_mgr.erode_cells(self.cfg.grid_size)
 		self._phase_move(erode, log, silent)
 
 		if effect == "collapse":

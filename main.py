@@ -86,15 +86,11 @@ def show_map_select(screen, fonts, clock) -> str:
 
 def main():
 	pygame.init()
-	init_screen = pygame.display.set_mode((760, 480))
-	pygame.display.set_caption("血轨 · 红教团兵棋推演规程")
+	cfg    = GameConfig("9x9")
+	screen = pygame.display.set_mode((cfg.screen_w, cfg.screen_h))
+	pygame.display.set_caption("血轨 v1.3 · 9×9 战场")
 	clock  = pygame.time.Clock()
 	fonts  = load_fonts()
-
-	map_mode = show_map_select(init_screen, fonts, clock)
-	cfg    = GameConfig(map_mode)
-	screen = pygame.display.set_mode((cfg.screen_w, cfg.screen_h))
-	pygame.display.set_caption(f"血轨 v1.2 · {'5×5' if map_mode=='5x5' else '10×10'} 战场")
 
 	game     = GameState(cfg)
 	game.setup()

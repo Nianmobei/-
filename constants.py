@@ -66,30 +66,19 @@ EVO_B = "evolved"
 # ─────────────────── 地图配置 ───────────────────
 
 class GameConfig:
-	"""持有所有与地图尺寸相关的空间参数"""
+	"""持有所有与地图尺寸相关的空间参数（9×9 唯一地图）"""
 
-	def __init__(self, mode: str = "5x5"):
-		self.mode = mode
-
-		if mode == "10x10":
-			self.grid_size      = 10
-			self.cell_size      = 68
-			self.board_offset_x = 210
-			self.board_offset_y = 58
-			self.panel_width    = 190
-			# 双本阵：关于中心 (4.5,4.5) 对称
-			self.red_base       = (4, 3)
-			self.dis_base       = (4, 6)
-			self.shared_base    = None
-		else:  # 5x5
-			self.grid_size      = 5
-			self.cell_size      = 110
-			self.board_offset_x = 220
-			self.board_offset_y = 80
-			self.panel_width    = 200
-			self.red_base       = None
-			self.dis_base       = None
-			self.shared_base    = (2, 2)
+	def __init__(self, mode: str = "9x9"):
+		self.mode = "9x9"
+		self.grid_size      = 9
+		self.cell_size      = 76
+		self.board_offset_x = 210
+		self.board_offset_y = 58
+		self.panel_width    = 190
+		# 双本阵：关于中心 (4,4) 点对称，主阵微后置至边缘
+		self.red_base       = (4, 0)
+		self.dis_base       = (4, 8)
+		self.shared_base    = None
 
 	@property
 	def screen_w(self) -> int:
@@ -114,9 +103,7 @@ class GameConfig:
 		return None
 
 	def all_bases(self) -> list:
-		if self.mode == "10x10":
-			return [(self.red_base, FACTION_RED), (self.dis_base, FACTION_DIS)]
-		return [(self.shared_base, None)]
+		return [(self.red_base, FACTION_RED), (self.dis_base, FACTION_DIS)]
 
 	def is_base(self, x: int, y: int) -> bool:
 		return any((x, y) == pos for pos, _ in self.all_bases())
@@ -133,29 +120,19 @@ class GameConfig:
 		return C_BASE_SHARE
 
 	def initial_positions(self) -> dict:
-		if self.mode == "10x10":
-			# 221三层阵型，以 (4.5,4.5) 为中心点对称
-			# 红方：前锋(y=3) x2，中坚(y=2) x2，后卫(y=1) x1
-			red = [(3, 3), (6, 3), (4, 2), (5, 2), (4, 1)]
-			# 灾方：点对称 (9-x, 9-y)
-			dis = [(6, 6), (3, 6), (5, 7), (4, 7), (5, 8)]
-			return {FACTION_RED: red, FACTION_DIS: dis}
-		# 5×5：221三层阵型，以 (2,2) 为中心点对称
-		# 红方：前锋(y=1) x2，中坚(y=0,x=0~1) x2，后卫(y=0,x=0最左)
-		# 修正：back 单位从侧翼 (0,2) 移至 (0,1)，与前锋同行纵深、
-		#       避免 back 单位到战场距离红灾不等的几何偏差
-		red = [(1, 1), (2, 1), (0, 1), (1, 0), (0, 0)]
-		# 灾方：点对称 (4-x, 4-y)
-		dis = [(3, 3), (2, 3), (4, 3), (3, 4), (4, 4)]
+		# 9×9：32阵型（前3+后2），关于中心 (4,4) 点对称，主阵后置至 y=0/y=8
+		# 红方：前锋(y=2) x3，后卫(y=1) x2（两翼护阵，中心留给本阵）
+		red = [(3, 2), (4, 2), (5, 2), (3, 1), (5, 1)]
+		# 灾方：点对称 (8-x, 8-y)
+		dis = [(5, 6), (4, 6), (3, 6), (5, 7), (3, 7)]
 		return {FACTION_RED: red, FACTION_DIS: dis}
 
 
-# 向后兼容（5×5 默认值）
-GRID_SIZE      = 5
-CELL_SIZE      = 110
-BOARD_OFFSET_X = 220
-BOARD_OFFSET_Y = 80
-PANEL_WIDTH    = 200
+# 全局常量（9×9 唯一地图）
+GRID_SIZE      = 9
+CELL_SIZE      = 76
+BOARD_OFFSET_X = 210
+BOARD_OFFSET_Y = 58
+PANEL_WIDTH    = 190
 SCREEN_W       = BOARD_OFFSET_X + GRID_SIZE * CELL_SIZE + PANEL_WIDTH + 20
 SCREEN_H       = BOARD_OFFSET_Y + GRID_SIZE * CELL_SIZE + 118
-BASE_CAMP      = (2, 2)

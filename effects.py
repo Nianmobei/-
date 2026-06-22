@@ -85,14 +85,15 @@ class EffectManager:
 	def desc(self) -> str:
 		return self.current["desc"]
 
-	def erode_cells(self) -> set:
+	def erode_cells(self, grid_size: int = 9) -> set:
 		"""返回当前蚀地格坐标集合（圆环向内扩张）"""
 		if self.tag() != "erode":
 			return set()
 		ring = self.erode_ring
 		cells = set()
-		for x in range(5):
-			for y in range(5):
-				if x <= ring or x >= 4 - ring or y <= ring or y >= 4 - ring:
+		gs = grid_size
+		for x in range(gs):
+			for y in range(gs):
+				if x <= ring or x >= gs - 1 - ring or y <= ring or y >= gs - 1 - ring:
 					cells.add((x, y))
 		return cells
