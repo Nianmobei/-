@@ -547,11 +547,17 @@ class GameState:
 				u.dead = True
 
 	def _check_evolution(self, log):
+		# 每2回合：存活单位获得+1经验（不含胚体、3级）
+		if self.turn % 2 == 0:
+			for u in self.alive_units():
+				if not u.is_embryo and u.level < 3:
+					u.kills += 1
+					log.append(f"⏱️ {u.name} 存活奖励 +1经验({u.kills})")
 		for u in self.alive_units():
-			if u.level == 1 and u.kills >= 2 and not hasattr(u, "_pending_evo"):
+			if u.level == 1 and u.kills >= 1 and not hasattr(u, "_pending_evo"):
 				u._pending_evo = True
 				log.append(f"⬆️ {u.name}({u.faction[:3]}) 可进化！")
-			if u.level == 2 and self.turn >= 5 and not hasattr(u, "_pending_evo3"):
+			if u.level == 2 and u.kills >= 1 and not hasattr(u, "_pending_evo3"):
 				u._pending_evo3 = True
 				log.append(f"⬆️ {u.name}({u.faction[:3]}) 可进化3级！")
 
