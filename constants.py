@@ -83,8 +83,8 @@ class GameConfig:
 		self.board_offset_y = 58
 		self.panel_width    = 190
 		# 双本阵：关于中心 (4,4) 点对称，主阵微后置至边缘
-		self.red_base       = (4, 0)
-		self.dis_base       = (4, 8)
+		self.red_base       = (4, 1)
+		self.dis_base       = (4, 7)
 		self.shared_base    = None
 
 	@property

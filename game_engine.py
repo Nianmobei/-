@@ -330,45 +330,54 @@ class GameState:
 			if p:
 				processed.add(frozenset([uid.uid, p]))
 
+		# 主攻击阶段：每个攻击者打一次主目标，记录每个目标被谁攻击（按顺序）
+		attacks_received = {}   # tgt_uid → [atk_uid, ...]（按攻击先后顺序）
 		for atk in attackers:
 			if atk.dead:
 				continue
 			if atk.ranged and atk.did_move:
 				continue
-			# 跳过已处理对（碰撞对），尝试下一目标而不是直接放弃
 			target = self._find_unprocessed_target(atk, all_alive, processed)
 			if not target:
 				continue
 			pair = frozenset([atk.uid, target.uid])
 			dmg = self._calc_damage(atk, target, all_alive)
-			same_spd = self.effective_spd(atk) == self.effective_spd(target)
-			t_atks_back = (
-				target.planned_action != ACT_DEFEND
-				and not target.is_embryo
-				and same_spd
-				and self._auto_find_target(target, all_alive) is atk
-			)
-			if t_atks_back:
-				# 同速同时互攻：锁定该对，防止重复
-				dmg2 = self._calc_damage(target, atk, all_alive)
-				atk.pending_dmg    += dmg2
-				target.pending_dmg += dmg
-				log.append(f"⚔️ 同时：{atk.name}↔{target.name}  互伤{dmg2}/{dmg}")
-				processed.add(pair)
-				self.last_attack_events.append((atk.uid, target.uid, atk.ranged, False))
-				self.last_attack_events.append((target.uid, atk.uid, target.ranged, False))
-			else:
-				target.pending_dmg += dmg
-				log.append(f"⚔️ {atk.name}({atk.faction[:3]}) → {target.name}  伤{dmg}")
-				self.last_attack_events.append((atk.uid, target.uid, atk.ranged, False))
+			target.pending_dmg += dmg
+			log.append(f"⚔️ {atk.name}({atk.faction[:3]}) → {target.name}  伤{dmg}")
+			self.last_attack_events.append((atk.uid, target.uid, atk.ranged, False))
+			attacks_received.setdefault(target.uid, []).append(atk.uid)
 
+		# 结算主攻击伤害
 		for u in self.alive_units():
 			if u.pending_dmg > 0:
 				old = u.hp
+				dmg_taken = u.pending_dmg
 				u.take_damage(u.pending_dmg)
-				log.append(f"💔 {u.name} −{u.pending_dmg}HP  {old}→{u.hp}")
+				u.pending_dmg = 0
+				log.append(f"💔 {u.name} −{dmg_taken}HP  {old}→{u.hp}")
 				if u.dead:
 					log.append(f"💀 {u.name}({u.faction[:3]}) 阵亡")
+
+		# 反击阶段：被攻击的存活单位进行反击
+		# 防御中 → 反击所有攻击者；未防御 → 只反击第一个攻击者
+		cur_alive = self.alive_units()
+		for tgt_uid, atk_uids in attacks_received.items():
+			tgt = self.get_unit_by_uid(tgt_uid)
+			if not tgt or tgt.dead or tgt.is_embryo:
+				continue
+			# 防御单位反击所有人，非防御只反击第一个
+			counter_list = atk_uids if tgt.defending else [atk_uids[0]]
+			for atk_uid in counter_list:
+				atk = self.get_unit_by_uid(atk_uid)
+				if not atk or atk.dead:
+					continue
+				cdmg = self._calc_damage(tgt, atk, cur_alive)
+				atk.take_damage(cdmg)
+				tag = "🔄 反击(全)" if tgt.defending else "🔄 反击"
+				log.append(f"{tag}：{tgt.name} → {atk.name}  伤{cdmg}")
+				self.last_attack_events.append((tgt.uid, atk.uid, tgt.ranged, False))
+				if atk.dead:
+					log.append(f"💀 {atk.name}({atk.faction[:3]}) 反击阵亡")
 
 		# 噬溃：本回合攻击目标死亡则回复1HP
 		for atk in attackers:
@@ -480,16 +489,16 @@ class GameState:
 					and manhattan(attacker.x, attacker.y, a.x, a.y) <= 2):
 				atk += 1; break
 		# 防御减免
-		def_bonus = 1 if defender.defending else 0
+		def_bonus = 0
 		if defender.has_trait("硬壳"):
 			def_bonus += 1
 		if defender.has_trait("列阵") and not defender.did_move:
 			def_bonus += 1
-		# 铁壁光环：相邻己方盾卫（未移动）给防守方+1减伤
+		# 铁壁光环
 		if any(a.faction == defender.faction and a.has_trait("铁壁") and not a.did_move
 				for a in adjacent_units(defender, all_alive)):
 			def_bonus += 1
-		# 战壕地形：防守方驻守战壕格，减伤1
+		# 战壕地形
 		if self.cfg.terrain_at(defender.x, defender.y) == "trench":
 			def_bonus += 1
 		return max(0, atk - def_bonus)

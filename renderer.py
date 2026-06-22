@@ -710,52 +710,58 @@ class Renderer:
 			pygame.draw.rect(self.screen, border_col, btn, 2, border_radius=8)
 			self._text(btn.centerx, btn.centery, lbl, self.fonts["bold"], C_WHITE, center=True)
 
-	# ──────────────────── 进化对话框 ─────────────────
+	# ──────────────────── 进化悬浮面板 ──────────────────
 
-	def _draw_evo_dialog(self, game, ui):
+	def _draw_evo_popup(self, game, ui):
 		from unit import UNIT_TEMPLATES
-		cfg = game.cfg
-		n   = len(ui.evo_options)
-		dw  = 520
-		dh  = 64 + n * 88 + 24
-		dx  = (cfg.screen_w - dw) // 2
-		dy  = (cfg.screen_h - dh) // 2
+		if not hasattr(ui, "evo_popup_rect") or ui.evo_popup_rect is None:
+			return
+		pr  = ui.evo_popup_rect
+		u   = game.get_unit_by_uid(ui.evo_uid)
+		if not u:
+			return
 
-		# 背景遮罩
-		mask = _alpha_surf(cfg.screen_w, cfg.screen_h)
-		mask.fill((0, 0, 0, 140))
-		self.screen.blit(mask, (0, 0))
+		# 背景遮罩（仅棋子周围淡化，不全屏）
+		mask = _alpha_surf(pr.width + 20, pr.height + 20)
+		mask.fill((0, 0, 0, 90))
+		self.screen.blit(mask, (pr.x - 10, pr.y - 10))
 
-		pygame.draw.rect(self.screen, (26, 16, 9), (dx, dy, dw, dh), border_radius=10)
-		pygame.draw.rect(self.screen, C_GOLD, (dx, dy, dw, dh), 2, border_radius=10)
-		pygame.draw.rect(self.screen, C_GOLD, (dx, dy, dw, 5), border_radius=10)
+		# 面板主体
+		pygame.draw.rect(self.screen, (22, 14, 8), pr, border_radius=8)
+		fc = C_RED if u.faction == FACTION_RED else C_DIS
+		pygame.draw.rect(self.screen, fc, pr, 2, border_radius=8)
+		pygame.draw.rect(self.screen, fc, pygame.Rect(pr.x, pr.y, pr.width, 5), border_radius=8)
 
-		u = game.get_unit_by_uid(ui.evo_uid)
-		self._text(dx + dw // 2, dy + 20, f"✨ 进化选择：{u.name if u else '?'}",
-			self.fonts["bold"], C_GOLD, center=True)
-		self._text(dx + dw // 2, dy + 42, "点击选择进化路线",
-			self.fonts["tiny"], C_GRAY, center=True)
+		# 标题
+		self._text(pr.x + pr.width // 2, pr.y + 14,
+			f"⬆ {u.name} 可进化", self.fonts["small"], C_GOLD, center=True)
+		self._text(pr.x + pr.width // 2, pr.y + 28,
+			"选任意路线将补满HP", self.fonts["tiny"], C_GRAY, center=True)
 
-		for i, opt in enumerate(ui.evo_options):
-			oy2  = dy + 62 + i * 88
-			rect = pygame.Rect(dx + 20, oy2, dw - 40, 76)
-			hov  = (i == ui.evo_hover)
-			bg   = (60, 40, 15) if hov else (36, 24, 11)
-			bd   = C_GOLD if hov else C_PANEL_BDR
-			pygame.draw.rect(self.screen, bg, rect, border_radius=7)
-			pygame.draw.rect(self.screen, bd, rect, 2, border_radius=7)
+		# 按钮
+		labels = ["A路", "B路", "不进化"]
+		colors = [(80, 180, 80), (180, 130, 40), (100, 100, 100)]
+		for idx, rect in ui.evo_btn_rects:
+			hov   = (idx == ui.evo_hover)
+			opt_i = idx  # 0/1 = 路线, 2 = 不进化
+			bc    = colors[opt_i] if opt_i < 3 else colors[2]
+			bg    = bc if hov else (40, 26, 14)
+			bd    = bc
+			pygame.draw.rect(self.screen, bg, rect, border_radius=5)
+			pygame.draw.rect(self.screen, bd, rect, 2, border_radius=5)
 
-			tmpl   = UNIT_TEMPLATES.get(opt["name"], {})
-			route  = "路线 A　保守强化" if i == 0 else "路线 B　特化进化"
-			rc     = C_GOLD if hov else C_GRAY
-			header = f"{route}  →  {opt['name']}"
-			self._text(rect.x + 12, rect.y + 9, header, self.fonts["small"],
-				C_WHITE if hov else C_GRAY)
-			stats = f"HP {tmpl.get('max_hp','?')}  ATK {tmpl.get('atk','?')}  SPD {tmpl.get('spd','?')}  特：{tmpl.get('trait','?')}"
-			self._text(rect.x + 12, rect.y + 30, stats, self.fonts["small"],
-				C_GOLD if hov else (160, 130, 60))
-			self._text(rect.x + 12, rect.y + 52, opt.get("desc", ""), self.fonts["tiny"],
-				(200, 200, 180) if hov else C_GRAY)
+			if opt_i < len(ui.evo_options):
+				opt  = ui.evo_options[opt_i]
+				tmpl = UNIT_TEMPLATES.get(opt["name"], {})
+				line1 = f"{labels[opt_i]} → {opt['name']}"
+				line2 = f"HP{tmpl.get('max_hp','?')} ATK{tmpl.get('atk','?')} SPD{tmpl.get('spd','?')} {tmpl.get('trait','?')}"
+			else:
+				line1 = "不进化  HP补满"
+				line2 = f"保持 {u.name}"
+			tc = C_WHITE if hov else C_GRAY
+			self._text(rect.x + 6, rect.centery - 7, line1, self.fonts["small"], tc)
+			self._text(rect.x + 6, rect.centery + 7, line2, self.fonts["tiny"],
+				C_GOLD if hov else (120, 100, 70))
 
 	# ──────────────────── 阶段横幅 ───────────────────
 
