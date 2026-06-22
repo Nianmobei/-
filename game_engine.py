@@ -211,8 +211,60 @@ class GameState:
 		from collections import defaultdict
 		gs = self.cfg.grid_size
 
+		# ── 战车冲阵预处理：直线逐格移动，遇敌停止并造成伤害 ──────
+		chariot_moved = set()
+		for u in self.alive_units():
+			if not u.has_trait("冲阵") or u.stun_move or u.planned_action == ACT_DEFEND:
+				continue
+			dx, dy = u.planned_dir
+			if dx == 0 and dy == 0:
+				continue
+			# 非直线规划视为无效
+			if dx != 0 and dy != 0:
+				u.planned_dir = DIR_NONE
+				continue
+			step_x = 1 if dx > 0 else -1
+			step_y = 1 if dy > 0 else -1
+			if dx == 0:
+				step_x = 0
+			if dy == 0:
+				step_y = 0
+			max_steps = min(abs(dx) + abs(dy), self.effective_spd(u))
+			cx, cy = u.x, u.y
+			for _ in range(max_steps):
+				nx, ny = cx + step_x, cy + step_y
+				if not in_bounds(nx, ny, gs):
+					break
+				cx, cy = nx, ny
+				enemies_here = [e for e in self.alive_units()
+					if e.x == cx and e.y == cy
+					and e.faction != u.faction and not e.is_embryo]
+				if enemies_here:
+					all_a = self.alive_units()
+					for enemy in enemies_here:
+						dmg = self._calc_damage(u, enemy, all_a)
+						enemy.take_damage(dmg)
+						log.append(f"💨 冲阵：{u.name}→{enemy.name}  伤{dmg}")
+						if dmg == 0 and self.effective_atk(u) > 0:
+							enemy.kills += 1
+							log.append(f"⭐ {enemy.name} 防住冲阵！+1经验({enemy.kills})")
+						if enemy.dead:
+							log.append(f"💀 {enemy.name}({enemy.faction[:3]}) 冲阵阵亡")
+						u._collision_partner  = enemy.uid
+						enemy._collision_partner = u.uid
+					break  # 遇敌停止
+			if cx != u.x or cy != u.y:
+				log.append(f"🚗 {u.name}({u.faction[:3]}) 冲阵 ({u.x},{u.y})→({cx},{cy})")
+				u.did_move = True
+			u.x, u.y = cx, cy
+			chariot_moved.add(u.uid)
+
 		intent = {}
 		for u in self.alive_units():
+			if u.uid in chariot_moved:
+				# 战车已自行处理移动，锁定当前位置
+				intent[u.uid] = (u.x, u.y)
+				continue
 			if u.stun_move or u.planned_action == ACT_DEFEND:
 				intent[u.uid] = (u.x, u.y)
 				continue
@@ -461,8 +513,10 @@ class GameState:
 		if attacker.has_trait("齐射"):
 			if any(u.faction == attacker.faction for u in adjacent_units(attacker, all_alive)):
 				atk += 1
-		for a in adjacent_units(attacker, all_alive):
-			if a.faction == attacker.faction and a.has_trait("战旗"):
+		for a in all_alive:
+			if (a.faction == attacker.faction and a.has_trait("战旗")
+					and a.uid != attacker.uid
+					and manhattan(attacker.x, attacker.y, a.x, a.y) <= 2):
 				atk += 1; break
 		# 防御减免
 		def_bonus = 1 if defender.defending else 0
@@ -516,6 +570,7 @@ class GameState:
 		u.base_spd = tmpl["spd"]
 		u.trait    = tmpl["trait"]
 		u.ranged   = tmpl["ranged"]
+		u.can_make = tmpl.get("can_make", True)
 		for a in ("_pending_evo", "_pending_evo3"):
 			if hasattr(u, a):
 				delattr(u, a)

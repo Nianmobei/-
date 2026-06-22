@@ -16,11 +16,11 @@ EVO_TABLE = {
 	],
 	(FACTION_RED, "盾卫"):   [
 		{"name": "盾卫3A", "desc": "路线A：保守，攻击+1"},
-		{"name": "旗卫",   "desc": "路线B：战旗，相邻友方攻击+1"},
+		{"name": "旗卫",   "desc": "路线B：战旗，距离2内友方攻+1，自身攻速+1"},
 	],
 	(FACTION_RED, "弩卫"):   [
-		{"name": "弩卫3A", "desc": "路线A：保守，攻击+1"},
-		{"name": "连弩",   "desc": "路线B：齐射，相邻友方时伤害+1"},
+		{"name": "弩卫3A", "desc": "路线A：劲弩，攻击+1"},
+		{"name": "战车",   "desc": "路线B：冲阵，直线5格冲锋，撞敌停止造成伤害"},
 	],
 	(FACTION_DIS, "甲兽"):   [
 		{"name": "甲兽3A", "desc": "路线A：保守，攻击+1"},
@@ -193,12 +193,21 @@ class UIState:
 		spd = game.effective_spd(u)
 
 		if u.planned_action != ACT_DEFEND:
-			for dx in range(-spd, spd + 1):
-				for dy in range(-spd, spd + 1):
-					if abs(dx) + abs(dy) <= spd and (dx, dy) != (0, 0):
-						nx, ny = u.x + dx, u.y + dy
-						if 0 <= nx < gs and 0 <= ny < gs:
-							self.move_hints.add((nx, ny))
+			if u.has_trait("冲阵"):
+				# 战车：只显示四个直线方向的格子
+				for ddx, ddy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+					for step in range(1, spd + 1):
+						nx, ny = u.x + ddx * step, u.y + ddy * step
+						if not (0 <= nx < gs and 0 <= ny < gs):
+							break
+						self.move_hints.add((nx, ny))
+			else:
+				for dx in range(-spd, spd + 1):
+					for dy in range(-spd, spd + 1):
+						if abs(dx) + abs(dy) <= spd and (dx, dy) != (0, 0):
+							nx, ny = u.x + dx, u.y + dy
+							if 0 <= nx < gs and 0 <= ny < gs:
+								self.move_hints.add((nx, ny))
 
 		rng = u.attack_range()
 		for ax in range(gs):
@@ -318,4 +327,4 @@ class UIState:
 		return None
 
 	def current_faction(self):
-		return FACTION_RED if self.phase in ("p1_plan", "p1_done") else FACTIO
+		return FACTION_RED if self.phase in ("p1_plan", "p1_done") else FACT

@@ -22,13 +22,13 @@ UNIT_TEMPLATES = {
 	"盾卫3A": dict(faction=FACTION_RED, level=3, max_hp=8, atk=3, spd=2, trait="铁壁",  ranged=False, can_make=False),
 	"弩卫3A": dict(faction=FACTION_RED, level=3, max_hp=7, atk=3, spd=3, trait="劲弩",  ranged=True,  can_make=True),
 	# 3级 红 B路（进化）
-	"旗卫":   dict(faction=FACTION_RED, level=3, max_hp=8, atk=3, spd=2, trait="战旗",  ranged=False, can_make=True),
-	"连弩":   dict(faction=FACTION_RED, level=3, max_hp=7, atk=3, spd=3, trait="齐射",  ranged=True,  can_make=True),
+	"旗卫":   dict(faction=FACTION_RED, level=3, max_hp=8, atk=4, spd=3, trait="战旗",  ranged=False, can_make=True),
+	"战车":   dict(faction=FACTION_RED, level=3, max_hp=7, atk=2, spd=5, trait="冲阵",  ranged=False, can_make=True),
 	# 3级 灾 A路（保守）
 	"甲兽3A": dict(faction=FACTION_DIS, level=3, max_hp=8, atk=3, spd=2, trait="硬壳",  ranged=False, can_make=True),
 	"炮兽3A": dict(faction=FACTION_DIS, level=3, max_hp=7, atk=3, spd=3, trait="投射",  ranged=True,  can_make=True),
 	# 3级 灾 B路（进化）
-	"恐兽":   dict(faction=FACTION_DIS, level=3, max_hp=8, atk=3, spd=1, trait="威压",  ranged=False, can_make=True),
+	"恐兽":   dict(faction=FACTION_DIS, level=3, max_hp=8, atk=4, spd=2, trait="威压",  ranged=False, can_make=True),
 	"猎群兽": dict(faction=FACTION_DIS, level=3, max_hp=7, atk=2, spd=3, trait="集群",  ranged=True,  can_make=True),
 	# 胚体
 	"胚体":   dict(faction=None,        level=0, max_hp=1, atk=0, spd=1, trait="",      ranged=False, can_make=False),
