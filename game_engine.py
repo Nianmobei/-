@@ -328,13 +328,11 @@ class GameState:
 					continue
 				if atk.ranged and atk.did_move:
 					continue
-				target = self._auto_find_target(atk, all_alive)
+				# 跳过已处理对（碰撞对），尝试下一目标而不是直接放弃
+				target = self._find_unprocessed_target(atk, all_alive, processed)
 				if not target:
 					continue
 				pair = frozenset([atk.uid, target.uid])
-				if pair in processed:
-					continue
-				processed.add(pair)
 				dmg = self._calc_damage(atk, target, all_alive)
 				same_spd = self.effective_spd(atk) == self.effective_spd(target)
 				t_atks_back = (
@@ -344,10 +342,12 @@ class GameState:
 					and self._auto_find_target(target, all_alive) is atk
 				)
 				if t_atks_back:
+					# 同速同时互攻：锁定该对，防止重复
 					dmg2 = self._calc_damage(target, atk, all_alive)
 					atk.pending_dmg    += dmg2
 					target.pending_dmg += dmg
 					log.append(f"⚔️ 同时：{atk.name}↔{target.name}  互伤{dmg2}/{dmg}")
+					processed.add(pair)
 				else:
 					target.pending_dmg += dmg
 					log.append(f"⚔️ {atk.name}({atk.faction[:3]}) → {target.name}  伤{dmg}")
@@ -355,6 +355,9 @@ class GameState:
 						c = self._calc_damage(target, atk, all_alive)
 						atk.pending_dmg += c
 						log.append(f"🛡️ 铁壁反击 伤{c}")
+						# 铁壁反击代替后手普攻，锁定该对
+						processed.add(pair)
+					# 非同速单向攻击：不锁定，慢速方稍后仍可攻击快速方
 
 			for u in self.alive_units():
 				if u.pending_dmg > 0:
@@ -411,6 +414,27 @@ class GameState:
 			return (post, pre)
 		in_range.sort(key=key)
 		return in_range[0]
+
+	def _find_unprocessed_target(self, attacker, all_alive, processed):
+		"""按优先级遍历射程内目标，跳过已与攻击者处理过的对；允许远程在碰撞后攻击其他目标"""
+		enemies = [u for u in all_alive
+			if u.faction != attacker.faction and not u.dead and not u.is_embryo]
+		rng = attacker.attack_range()
+		in_range = [e for e in enemies
+			if manhattan(attacker.x, attacker.y, e.x, e.y) <= rng]
+		if not in_range:
+			return None
+		atk_pre = self._pre_pos.get(attacker.uid, (attacker.x, attacker.y))
+		def key(e):
+			post = manhattan(attacker.x, attacker.y, e.x, e.y)
+			ep   = self._pre_pos.get(e.uid, (e.x, e.y))
+			pre  = manhattan(atk_pre[0], atk_pre[1], ep[0], ep[1])
+			return (post, pre)
+		in_range.sort(key=key)
+		for e in in_range:
+			if frozenset([attacker.uid, e.uid]) not in processed:
+				return e
+		return None
 
 	def _auto_find_target_raw(self, attacker, all_units):
 		enemies = [u for u in all_units
