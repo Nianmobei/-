@@ -99,7 +99,7 @@ def main():
 	anim     = AnimationManager()
 
 	ui.show_phase_banner = True
-	ui.banner_text = f"血轨开局 · {map_mode}  当前效果：{game.effect_mgr.name()}  |  点击开始"
+	ui.banner_text = "血轨 v1.4 · 9×9战场  战壕(4,4)减伤  高地(0,4)(8,4)攻+1  |  点击开始"
 
 	running   = True
 	pre_snap  = {}

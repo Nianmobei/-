@@ -122,18 +122,12 @@ class GameState:
 
 	def effective_atk(self, unit):
 		atk = unit.atk
-		if self.effect_tag() == "blood_surge":
+		if self.cfg.terrain_at(unit.x, unit.y) == "high":
 			atk += 1
-		if self.effect_tag() == "beast_instinct":
-			if any(u.faction == unit.faction for u in adjacent_units(unit, self.alive_units())):
-				atk += 1
 		return atk
 
 	def effective_spd(self, unit):
-		spd = unit.spd
-		if self.effect_tag() == "red_whisper":
-			spd += 1
-		return spd
+		return unit.spd
 
 	def predict_attack_target(self, unit):
 		"""规划阶段预测自动攻击目标（供 UI 预览）"""
@@ -144,40 +138,13 @@ class GameState:
 
 	def execute_turn(self):
 		log    = []
-		effect = self.effect_tag()
-		silent = (effect == "silence")
-		if silent:
-			log.append("⚡ 寂静：本回合无法攻击")
 
 		self._pre_pos = {u.uid: (u.x, u.y) for u in self.alive_units()}
 
-		erode = self.effect_mgr.erode_cells(self.cfg.grid_size)
-		self._phase_move(erode, log, silent)
-
-		if effect == "collapse":
-			for faction in (FACTION_RED, FACTION_DIS):
-				tuid = self.collapse_targets.get(faction)
-				if tuid:
-					t = self.get_unit_by_uid(tuid)
-					if t and not t.dead:
-						t.take_damage(1)
-						log.append(f"💥 崩解：{t.name} −1HP → {t.hp}HP")
-
-		self._phase_action(log, silent)
+		erode = set()  # 蚀地已移除
+		self._phase_move(erode, log)
+		self._phase_action(log)
 		self._flush_dead(log)
-
-		# 铁砧回响
-		if effect == "anvil_echo":
-			for u in self.alive_units():
-				if not u.did_move:
-					u.heal(1)
-					log.append(f"🔨 铁砧：{u.name} +1HP → {u.hp}HP")
-
-		# 回音
-		if effect == "echo":
-			for u in self.alive_units():
-				u.heal(1)
-			log.append("🔔 回音：所有棋子 +1HP")
 
 		# 驻扎回血（简易兵营 lv2 +1HP，前线营地 lv3 +2HP）
 		if self.camp_level >= 2:
@@ -188,17 +155,11 @@ class GameState:
 						u.heal(bonus)
 						log.append(f"🏕️ 驻扎：{u.name} +{bonus}HP → {u.hp}HP")
 
-		rift = (effect == "rift")
 		for bpos, bstate in self.base_states.items():
-			bstate.update(self.units_at(*bpos), rift, log, bpos)
+			bstate.update(self.units_at(*bpos), False, log, bpos)
 
 		self._check_evolution(log)
 		self._check_victory(log)
-
-		if self.turn % 3 == 0:
-			self.effect_mgr.advance()
-			log.append(f"🌀 战场效果 → 【{self.effect_mgr.name()}】{self.effect_mgr.desc()}")
-
 		self._update_camp_level()
 		self.turn += 1
 		self.log.extend(log)
@@ -313,11 +274,6 @@ class GameState:
 		if not silent:
 			self._resolve_collisions(collision_pairs, log)
 
-		if erode:
-			for u in self.alive_units():
-				if (u.x, u.y) in erode and u.did_move:
-					log.append(f"🌑 蚀地：{u.name} 进入蚀地格")
-
 	def _resolve_collisions(self, collision_pairs, log):
 		all_alive = self.alive_units()
 		for w_uid, l_uid in collision_pairs:
@@ -370,90 +326,89 @@ class GameState:
 			if u.planned_action == ACT_DEFEND:
 				u.defending = True
 
-		if not silent:
-			attackers = [u for u in all_alive
-				if u.planned_action != ACT_DEFEND and not u.is_embryo]
-			attackers.sort(key=lambda u: self.effective_spd(u), reverse=True)
+		attackers = [u for u in all_alive
+			if u.planned_action != ACT_DEFEND and not u.is_embryo]
+		attackers.sort(key=lambda u: self.effective_spd(u), reverse=True)
 
-			processed = set()
-			for uid in all_alive:
-				p = getattr(uid, "_collision_partner", None)
-				if p:
-					processed.add(frozenset([uid.uid, p]))
+		processed = set()
+		for uid in all_alive:
+			p = getattr(uid, "_collision_partner", None)
+			if p:
+				processed.add(frozenset([uid.uid, p]))
 
-			for atk in attackers:
-				if atk.dead:
-					continue
-				if atk.ranged and atk.did_move:
-					continue
-				# 跳过已处理对（碰撞对），尝试下一目标而不是直接放弃
-				target = self._find_unprocessed_target(atk, all_alive, processed)
-				if not target:
-					continue
-				pair = frozenset([atk.uid, target.uid])
-				dmg = self._calc_damage(atk, target, all_alive)
-				same_spd = self.effective_spd(atk) == self.effective_spd(target)
-				t_atks_back = (
-					target.planned_action != ACT_DEFEND
-					and not target.is_embryo
-					and same_spd
-					and self._auto_find_target(target, all_alive) is atk
-				)
-				if t_atks_back:
-					# 同速同时互攻：锁定该对，防止重复
-					dmg2 = self._calc_damage(target, atk, all_alive)
-					atk.pending_dmg    += dmg2
-					target.pending_dmg += dmg
-					log.append(f"⚔️ 同时：{atk.name}↔{target.name}  互伤{dmg2}/{dmg}")
-					processed.add(pair)
-				else:
-					target.pending_dmg += dmg
-					log.append(f"⚔️ {atk.name}({atk.faction[:3]}) → {target.name}  伤{dmg}")
-					# 非同速单向攻击：不锁定，慢速方稍后仍可攻击快速方
-				# 防住判定（dmg=0 但攻击有效）：防守方 +1 经验
-				if dmg == 0 and self.effective_atk(atk) > 0:
-					target.kills += 1
-					log.append(f"⭐ {target.name} 防住攻击！+1经验({target.kills})")
-				if t_atks_back:
-					dmg2_val = self._calc_damage(target, atk, all_alive) if t_atks_back else 0
-					if dmg2_val == 0 and self.effective_atk(target) > 0:
-						atk.kills += 1
-						log.append(f"⭐ {atk.name} 防住反攻！+1经验({atk.kills})")
+		for atk in attackers:
+			if atk.dead:
+				continue
+			if atk.ranged and atk.did_move:
+				continue
+			# 跳过已处理对（碰撞对），尝试下一目标而不是直接放弃
+			target = self._find_unprocessed_target(atk, all_alive, processed)
+			if not target:
+				continue
+			pair = frozenset([atk.uid, target.uid])
+			dmg = self._calc_damage(atk, target, all_alive)
+			same_spd = self.effective_spd(atk) == self.effective_spd(target)
+			t_atks_back = (
+				target.planned_action != ACT_DEFEND
+				and not target.is_embryo
+				and same_spd
+				and self._auto_find_target(target, all_alive) is atk
+			)
+			if t_atks_back:
+				# 同速同时互攻：锁定该对，防止重复
+				dmg2 = self._calc_damage(target, atk, all_alive)
+				atk.pending_dmg    += dmg2
+				target.pending_dmg += dmg
+				log.append(f"⚔️ 同时：{atk.name}↔{target.name}  互伤{dmg2}/{dmg}")
+				processed.add(pair)
+			else:
+				target.pending_dmg += dmg
+				log.append(f"⚔️ {atk.name}({atk.faction[:3]}) → {target.name}  伤{dmg}")
+				# 非同速单向攻击：不锁定，慢速方稍后仍可攻击快速方
+			# 防住判定（dmg=0 但攻击有效）：防守方 +1 经验
+			if dmg == 0 and self.effective_atk(atk) > 0:
+				target.kills += 1
+				log.append(f"⭐ {target.name} 防住攻击！+1经验({target.kills})")
+			if t_atks_back:
+				dmg2_val = self._calc_damage(target, atk, all_alive) if t_atks_back else 0
+				if dmg2_val == 0 and self.effective_atk(target) > 0:
+					atk.kills += 1
+					log.append(f"⭐ {atk.name} 防住反攻！+1经验({atk.kills})")
 
-			for u in self.alive_units():
-				if u.pending_dmg > 0:
-					old = u.hp
-					u.take_damage(u.pending_dmg)
-					log.append(f"💔 {u.name} −{u.pending_dmg}HP  {old}→{u.hp}")
-					if u.dead:
-						log.append(f"💀 {u.name}({u.faction[:3]}) 阵亡")
+		for u in self.alive_units():
+			if u.pending_dmg > 0:
+				old = u.hp
+				u.take_damage(u.pending_dmg)
+				log.append(f"💔 {u.name} −{u.pending_dmg}HP  {old}→{u.hp}")
+				if u.dead:
+					log.append(f"💀 {u.name}({u.faction[:3]}) 阵亡")
 
-			# 噬溃
-			for atk in attackers:
-				if atk.dead or not atk.has_trait("噬溃"):
-					continue
-				t = self._auto_find_target_raw(atk, self.units)
-				if t and t.dead:
-					atk.heal(2)
-					log.append(f"🩸 噬溃：{atk.name} +2HP → {atk.hp}HP")
+		# 噬溃
+		for atk in attackers:
+			if atk.dead or not atk.has_trait("噬溃"):
+				continue
+			t = self._auto_find_target_raw(atk, self.units)
+			if t and t.dead:
+				atk.heal(2)
+				log.append(f"🩸 噬溃：{atk.name} +2HP → {atk.hp}HP")
 
-			# 威压
-			for atk in attackers:
-				if atk.has_trait("威压") and not atk.dead:
-					t = self._auto_find_target(atk, all_alive)
-					if t and t.pending_dmg > 0:
-						t.stun_move = True
-						log.append(f"😱 威压：{t.name} 下回合无法移动")
+		# 威压
+		for atk in attackers:
+			if atk.has_trait("威压") and not atk.dead:
+				t = self._auto_find_target(atk, all_alive)
+				if t and t.pending_dmg > 0:
+					t.stun_move = True
+					log.append(f"😱 威压：{t.name} 下回合无法移动")
 
-			# 集群溅射
-			for atk in attackers:
-				if atk.has_trait("集群") and not atk.dead:
-					t = self._auto_find_target(atk, self.alive_units())
-					if t:
-						for nb in adjacent_units(t, self.alive_units()):
-							if nb.faction != atk.faction:
-								nb.take_damage(1)
-								log.append(f"💥 集群：{nb.name} −1HP")
+		# 集群溅射
+		for atk in attackers:
+			if atk.has_trait("集群") and not atk.dead:
+				t = self._auto_find_target(atk, self.alive_units())
+				if t:
+					for nb in adjacent_units(t, self.alive_units()):
+						if nb.faction != atk.faction:
+							nb.take_damage(1)
+							log.append(f"💥 集群：{nb.name} −1HP")
 
 		for u in self.alive_units():
 			if u.planned_action == ACT_MAKE and u.level >= 2 and not u.made_unit and u.can_make:
@@ -527,6 +482,9 @@ class GameState:
 		# 铁壁光环：相邻己方盾卫（未移动）给防守方+1减伤
 		if any(a.faction == defender.faction and a.has_trait("铁壁") and not a.did_move
 				for a in adjacent_units(defender, all_alive)):
+			def_bonus += 1
+		# 战壕地形：防守方驻守战壕格，减伤1
+		if self.cfg.terrain_at(defender.x, defender.y) == "trench":
 			def_bonus += 1
 		return max(0, atk - def_bonus)
 

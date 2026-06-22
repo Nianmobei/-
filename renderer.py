@@ -40,7 +40,6 @@ class Renderer:
 		ox    = cfg.board_offset_x
 		oy    = cfg.board_offset_y
 		gs    = cfg.grid_size
-		erode = game.effect_mgr.erode_cells()
 
 		for cy in range(gs):
 			for cx in range(gs):
@@ -49,10 +48,13 @@ class Renderer:
 				rect = pygame.Rect(rx, ry, cs, cs)
 
 				# 底色
+				terrain = cfg.terrain_at(cx, cy)
 				if cfg.is_base(cx, cy):
 					color = cfg.base_color(cfg.base_owner(cx, cy))
-				elif (cx, cy) in erode:
-					color = (14, 26, 11)
+				elif terrain == "trench":
+					color = C_TERRAIN_TRENCH
+				elif terrain == "high":
+					color = C_TERRAIN_HIGH
 				elif (cx + cy) % 2 == 0:
 					color = C_CELL
 				else:
@@ -93,9 +95,11 @@ class Renderer:
 						tag = ("红" if bs.occupier == FACTION_RED else "灾") + f"·{bs.occupy_count}/2"
 						self._text(rx + cs // 2, ry + 8, tag, self.fonts["tiny"], fc, center=True)
 
-				# 蚀地
-				if (cx, cy) in erode:
-					self._text(rx + 3, ry + cs - 12, "蚀", self.fonts["tiny"], (70, 140, 55))
+				# 地形标签
+				if terrain == "trench":
+					self._text(rx + 3, ry + cs - 12, "壕", self.fonts["tiny"], (140, 170, 220))
+				elif terrain == "high":
+					self._text(rx + 3, ry + cs - 12, "高", self.fonts["tiny"], (220, 190, 80))
 
 				# 棋子
 				self._draw_units_in_cell(game.units_at(cx, cy), rx, ry, game, ui, anim, cs)
@@ -301,8 +305,8 @@ class Renderer:
 		pygame.draw.rect(self.screen, C_PANEL_BDR, (x, y, w, h), 1)
 
 		self._text(x + w // 2, y + 13, f"第 {game.turn} 回合", self.fonts["bold"], C_GOLD, center=True)
-		self._text(x + w // 2, y + 30, f"⚡{game.effect_mgr.name()}", self.fonts["small"], C_WHITE, center=True)
-		for i, line in enumerate(self._wrap(game.effect_mgr.desc(), 13)):
+		self._text(x + w // 2, y + 30, "地形", self.fonts["small"], C_WHITE, center=True)
+		for i, line in enumerate(["壕(4,4)：驻守减伤1", "高(0,4)(8,4)：攻击+1"]):
 			self._text(x + 5, y + 47 + i * 13, line, self.fonts["tiny"], C_GRAY)
 
 		camp_names = {1: "废墟据点", 2: "简易兵营", 3: "前线营地"}

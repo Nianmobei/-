@@ -62,6 +62,13 @@ DIR_NAMES = {
 EVO_A = "conservative"
 EVO_B = "evolved"
 
+# ─── 地形 ────────────────────────────────────
+# 战壕 (4,4)：驻守减伤1；高地 (0,4) (8,4)：攻击+1
+TERRAIN_TRENCH = (4, 4)          # 战壕：防守方减伤1
+TERRAIN_HIGH   = ((0, 4), (8, 4))  # 高地：攻击方+1
+C_TERRAIN_TRENCH = (40, 55, 80)  # 战壕格底色（蓝灰）
+C_TERRAIN_HIGH   = (70, 55, 28)  # 高地格底色（暗金）
+
 
 # ─────────────────── 地图配置 ───────────────────
 
@@ -107,6 +114,14 @@ class GameConfig:
 
 	def is_base(self, x: int, y: int) -> bool:
 		return any((x, y) == pos for pos, _ in self.all_bases())
+
+	def terrain_at(self, x: int, y: int) -> str:
+		"""返回地形类型：'trench' / 'high' / None"""
+		if (x, y) == TERRAIN_TRENCH:
+			return "trench"
+		if (x, y) in TERRAIN_HIGH:
+			return "high"
+		return None
 
 	def base_owner(self, x: int, y: int):
 		for pos, owner in self.all_bases():
