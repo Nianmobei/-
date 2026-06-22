@@ -511,8 +511,8 @@ class GameState:
 				u.dead = True
 
 	def _check_evolution(self, log):
-		# 每4回合：每方经验最高且未达进化门槛的单位额外+1经验
-		if self.turn % 4 == 0:
+		# 每3回合：每方经验最高且未达进化门槛的单位额外+1经验
+		if self.turn % 3 == 0:
 			for faction in (FACTION_RED, FACTION_DIS):
 				fname = "红方" if faction == FACTION_RED else "灾方"
 				# 候选：非胚体、未到3级、尚未触发进化的单位
