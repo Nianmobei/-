@@ -109,8 +109,8 @@ class Renderer:
 		if anim and anim.is_playing:
 			self._draw_damage_tags(game, ui, anim)
 			self._draw_projectiles(game, anim)
-		if ui.show_evo_dialog:
-			self._draw_evo_dialog(game, ui)
+		if ui.evo_uid is not None:
+			self._draw_evo_popup(game, ui)
 		if ui.show_phase_banner:
 			self._draw_phase_banner(game, ui)
 

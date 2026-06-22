@@ -1,6 +1,5 @@
-# 血轨：UI 状态管理
-# 操作：拖拽棋子到目标格（菱形移动范围）
-# 行动按钮：在左侧面板，不浮在棋盘上
+# 血轨：UI 状态管理 v2
+# 进化选择改为棋子旁悬浮面板（3选项），去掉中央弹窗
 
 import pygame
 from constants import *
@@ -33,6 +32,8 @@ EVO_TABLE = {
 }
 
 ACT_BTN_H = 28
+EVO_BTN_H = 30
+EVO_POPUP_W = 200
 
 
 class UIState:
@@ -44,22 +45,22 @@ class UIState:
 		# 选中 & 拖拽
 		self.selected_uid: int  = None
 		self.dragging_uid: int  = None
-		self.drag_pos: tuple    = None   # 鼠标屏幕坐标（拖动中）
-		self.hover_cell: tuple  = None   # 鼠标悬停格
+		self.drag_pos: tuple    = None
+		self.hover_cell: tuple  = None
 
 		# 移动范围与选定目标
-		self.move_hints: set       = set()  # 菱形范围内可到达的格
-		self.selected_move_cell    = None   # (cx,cy) 已规划目的地
-		self.attack_hints: set     = set()  # 攻击范围预览
+		self.move_hints: set       = set()
+		self.selected_move_cell    = None
+		self.attack_hints: set     = set()
 
 		# 行动按钮（位于左侧面板）
-		self.act_btn_rects: list   = []     # [(act, label, Rect)]
+		self.act_btn_rects: list   = []
 
-		# 进化
-		self.show_evo_dialog       = False
+		# 进化（悬浮面板，无中央弹窗）
 		self.evo_uid               = None
-		self.evo_options           = []
+		self.evo_options           = []   # [{"name","desc"}, ...]，最多2个，第3个是"不进化"
 		self.evo_hover             = -1
+		self.evo_btn_rects: list   = []   # [(idx, Rect)]，idx=0/1=进化路线，idx=2=不进化
 		self.pending_evo_uids: list = []
 
 		# 阶段横幅
@@ -73,7 +74,8 @@ class UIState:
 	# ──────────────── 主事件入口 ──────────────────
 
 	def handle_event(self, event, game):
-		if self.show_evo_dialog:
+		# 进化悬浮面板优先处理
+		if self.evo_uid is not None:
 			return self._handle_evo_event(event, game)
 
 		if self.show_phase_banner:
@@ -110,11 +112,9 @@ class UIState:
 	def _handle_mousedown(self, pos, game):
 		mx, my = pos
 
-		# 确认按钮
 		if self.confirm_btn_rect.collidepoint(mx, my):
 			return self._on_confirm(game)
 
-		# 行动按钮（左侧面板）
 		for act, label, rect in self.act_btn_rects:
 			if rect.collidepoint(mx, my):
 				u = game.get_unit_by_uid(self.selected_uid)
@@ -122,7 +122,6 @@ class UIState:
 					self._set_action(act, u, game)
 				return None
 
-		# 棋盘区域
 		cell = game.cfg.screen_to_cell(mx, my)
 		if cell:
 			cx, cy = cell
@@ -130,16 +129,14 @@ class UIState:
 
 		return None
 
-	# ──────────────── 鼠标释放（完成拖拽） ───────────
+	# ──────────────── 鼠标释放 ───────────────────
 
 	def _handle_mouseup(self, pos, game):
 		if self.dragging_uid is None:
 			return None
-
 		mx, my = pos
 		u = game.get_unit_by_uid(self.dragging_uid)
 		cell = game.cfg.screen_to_cell(mx, my)
-
 		if u and cell:
 			cx, cy = cell
 			if (cx, cy) in self.move_hints:
@@ -150,9 +147,6 @@ class UIState:
 				u.planned_dir = DIR_NONE
 				self.selected_move_cell = None
 				game.log.append(f"📍 {u.name} 原地不动")
-			# 释放在非法格：保持当前规划不变
-
-		# 清除拖拽状态（保留选中）
 		self.dragging_uid = None
 		self.drag_pos     = None
 		return None
@@ -163,7 +157,6 @@ class UIState:
 		faction = FACTION_RED if self.phase == "p1_plan" else FACTION_DIS
 		units   = [u for u in game.units_at(cx, cy) if u.faction == faction]
 		if not units:
-			# 点击非己方格 → 取消选中
 			self.selected_uid = None
 			self.dragging_uid = None
 			self.move_hints.clear()
@@ -177,13 +170,12 @@ class UIState:
 		self.drag_pos     = screen_pos
 		self._populate_hints(u, game)
 		self._build_act_buttons(u, game)
-		# 同步已规划的目的地
 		if u.planned_dir != DIR_NONE:
 			self.selected_move_cell = (u.x + u.planned_dir[0], u.y + u.planned_dir[1])
 		else:
 			self.selected_move_cell = None
 
-	# ──────────────── 移动范围（菱形） ───────────────
+	# ──────────────── 移动范围 ───────────────────
 
 	def _populate_hints(self, u, game):
 		self.move_hints.clear()
@@ -191,10 +183,8 @@ class UIState:
 		cfg = game.cfg
 		gs  = cfg.grid_size
 		spd = game.effective_spd(u)
-
 		if u.planned_action != ACT_DEFEND:
 			if u.has_trait("冲阵"):
-				# 战车：只显示四个直线方向的格子
 				for ddx, ddy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
 					for step in range(1, spd + 1):
 						nx, ny = u.x + ddx * step, u.y + ddy * step
@@ -208,7 +198,6 @@ class UIState:
 							nx, ny = u.x + dx, u.y + dy
 							if 0 <= nx < gs and 0 <= ny < gs:
 								self.move_hints.add((nx, ny))
-
 		rng = u.attack_range()
 		for ax in range(gs):
 			for ay in range(gs):
@@ -216,15 +205,12 @@ class UIState:
 				if 1 <= d <= rng:
 					self.attack_hints.add((ax, ay))
 
-	# ──────────────── 行动按钮（左侧面板） ───────────
+	# ──────────────── 行动按钮 ───────────────────
 
 	def _build_act_buttons(self, u, game):
 		self.act_btn_rects.clear()
-		cfg   = game.cfg
-		px    = 8
-		pw    = cfg.board_offset_x - 16
-		bw    = pw
-		# 按钮起始 Y：面板底部向上留空
+		cfg    = game.cfg
+		px, pw = 8, cfg.board_offset_x - 16
 		total_h = cfg.grid_size * cfg.cell_size
 		n_btns  = 2
 		if cfg.is_base(u.x, u.y) and not u.is_embryo:
@@ -232,15 +218,13 @@ class UIState:
 		if u.level >= 2 and not u.made_unit and not u.is_embryo and getattr(u, "can_make", True):
 			n_btns += 1
 		start_y = cfg.board_offset_y + total_h - (n_btns * (ACT_BTN_H + 5)) - 6
-
 		actions = [(ACT_NONE, "⚔ 自动攻击"), (ACT_DEFEND, "🛡 防御")]
 		if cfg.is_base(u.x, u.y) and not u.is_embryo:
 			actions.append((ACT_OCCUPY, "🚩 占领"))
 		if u.level >= 2 and not u.made_unit and not u.is_embryo and getattr(u, "can_make", True):
 			actions.append((ACT_MAKE, "🐣 制造"))
-
 		for i, (act, label) in enumerate(actions):
-			r = pygame.Rect(px, start_y + i * (ACT_BTN_H + 5), bw, ACT_BTN_H)
+			r = pygame.Rect(px, start_y + i * (ACT_BTN_H + 5), pw, ACT_BTN_H)
 			self.act_btn_rects.append((act, label, r))
 
 	def _set_action(self, act, u, game):
@@ -249,7 +233,10 @@ class UIState:
 			u.planned_dir       = DIR_NONE
 			self.selected_move_cell = None
 			self.move_hints.clear()
-		game.log.append(f"{'⚔' if act==ACT_NONE else '🛡' if act==ACT_DEFEND else '🚩' if act==ACT_OCCUPY else '🐣'} {u.name} 行动：{act}")
+		game.log.append(
+			f"{'⚔' if act==ACT_NONE else '🛡' if act==ACT_DEFEND else '🚩' if act==ACT_OCCUPY else '🐣'}"
+			f" {u.name} 行动：{act}"
+		)
 
 	# ──────────────── 阶段推进 ────────────────────
 
@@ -265,7 +252,7 @@ class UIState:
 			return "execute"
 		elif self.phase in ("p2_done", "result"):
 			if self.pending_evo_uids:
-				self._open_evo_dialog(game)
+				self._open_evo_popup(game)
 				return None
 			return "new_round"
 		return None
@@ -279,7 +266,7 @@ class UIState:
 		self.act_btn_rects.clear()
 		self.selected_move_cell = None
 
-	# ──────────────── 进化对话框 ──────────────────
+	# ──────────────── 进化悬浮面板 ──────────────────
 
 	def queue_evolutions(self, game):
 		self.pending_evo_uids = []
@@ -287,44 +274,96 @@ class UIState:
 			if hasattr(u, "_pending_evo") or hasattr(u, "_pending_evo3"):
 				self.pending_evo_uids.append(u.uid)
 		if self.pending_evo_uids:
-			self._open_evo_dialog(game)
+			self._open_evo_popup(game)
 
-	def _open_evo_dialog(self, game):
+	def _open_evo_popup(self, game):
 		if not self.pending_evo_uids:
 			return
 		uid  = self.pending_evo_uids[0]
 		u    = game.get_unit_by_uid(uid)
 		opts = EVO_TABLE.get((u.faction, u.name), []) if u else []
 		if not opts:
+			# 无进化表项：直接跳过（仅补满血）
+			game.skip_evolution(uid)
 			self.pending_evo_uids.pop(0)
+			if self.pending_evo_uids:
+				self._open_evo_popup(game)
 			return
-		self.show_evo_dialog = True
-		self.evo_uid         = uid
-		self.evo_options     = opts
-		self.evo_hover       = 0
+		self.evo_uid     = uid
+		self.evo_options = opts
+		self.evo_hover   = -1
+		self._rebuild_evo_rects(game)
+
+	def _rebuild_evo_rects(self, game):
+		"""计算进化面板按钮位置（棋子附近）"""
+		self.evo_btn_rects.clear()
+		if self.evo_uid is None:
+			return
+		u   = game.get_unit_by_uid(self.evo_uid)
+		if not u:
+			return
+		cfg = game.cfg
+		cs  = cfg.cell_size
+		# 棋子中心屏幕坐标
+		scx = cfg.board_offset_x + u.x * cs + cs // 2
+		scy = cfg.board_offset_y + u.y * cs + cs // 2
+
+		n_btns = len(self.evo_options) + 1  # 路线 + 不进化
+		popup_h = n_btns * (EVO_BTN_H + 4) + 36
+		popup_w = EVO_POPUP_W
+
+		# 决定面板出现在棋子的哪一侧
+		if scx + cs // 2 + popup_w + 8 <= cfg.screen_w - cfg.panel_width:
+			px = scx + cs // 2 + 8
+		else:
+			px = scx - cs // 2 - popup_w - 8
+
+		if scy + popup_h // 2 + 4 <= cfg.board_offset_y + cfg.grid_size * cs:
+			py = max(cfg.board_offset_y + 4, scy - popup_h // 2)
+		else:
+			py = cfg.board_offset_y + cfg.grid_size * cs - popup_h - 4
+
+		# 路线按钮
+		for i, opt in enumerate(self.evo_options):
+			r = pygame.Rect(px + 4, py + 32 + i * (EVO_BTN_H + 4), popup_w - 8, EVO_BTN_H)
+			self.evo_btn_rects.append((i, r))
+		# 不进化按钮
+		skip_i = len(self.evo_options)
+		r = pygame.Rect(px + 4,
+			py + 32 + skip_i * (EVO_BTN_H + 4),
+			popup_w - 8, EVO_BTN_H)
+		self.evo_btn_rects.append((2, r))   # idx=2 固定为"不进化"
+
+		# 存储面板左上角（渲染器用）
+		self.evo_popup_rect = pygame.Rect(px, py, popup_w, popup_h)
 
 	def _handle_evo_event(self, event, game):
-		n   = len(self.evo_options)
-		dw  = 520
-		dh  = 60 + n * 84 + 28
-		dx  = (self.sw - dw) // 2
-		dy  = (self.sh - dh) // 2
 		if event.type == pygame.MOUSEMOTION:
 			mx, my = event.pos
-			for i in range(n):
-				if pygame.Rect(dx+24, dy+56+i*84, dw-48, 72).collidepoint(mx, my):
-					self.evo_hover = i
+			self.evo_hover = -1
+			for idx, r in self.evo_btn_rects:
+				if r.collidepoint(mx, my):
+					self.evo_hover = idx
 		if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
 			mx, my = event.pos
-			for i, opt in enumerate(self.evo_options):
-				if pygame.Rect(dx+24, dy+56+i*84, dw-48, 72).collidepoint(mx, my):
-					game.evolve_unit(self.evo_uid, opt["name"])
-					self.show_evo_dialog = False
-					self.pending_evo_uids.pop(0)
-					if self.pending_evo_uids:
-						self._open_evo_dialog(game)
+			for idx, r in self.evo_btn_rects:
+				if r.collidepoint(mx, my):
+					self._apply_evo(idx, game)
 					return None
 		return None
 
+	def _apply_evo(self, idx, game):
+		uid = self.evo_uid
+		if idx == 2:
+			game.skip_evolution(uid)
+		else:
+			opt = self.evo_options[idx]
+			game.evolve_unit(uid, opt["name"])
+		self.evo_uid = None
+		self.evo_btn_rects.clear()
+		self.pending_evo_uids.pop(0)
+		if self.pending_evo_uids:
+			self._open_evo_popup(game)
+
 	def current_faction(self):
-		return FACTION_RED if self.phase in ("p1_plan", "p1_done") else FACT
+		return FACTION_RED if self.phase in ("p1_plan", "p1_done") else FACTION_DIS

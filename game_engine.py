@@ -209,9 +209,6 @@ class GameState:
 						dmg = self._calc_damage(u, enemy, all_a)
 						enemy.take_damage(dmg)
 						log.append(f"💨 冲阵：{u.name}→{enemy.name}  伤{dmg}")
-						if dmg == 0 and self.effective_atk(u) > 0:
-							enemy.kills += 1
-							log.append(f"⭐ {enemy.name} 防住冲阵！+1经验({enemy.kills})")
 						if enemy.dead:
 							log.append(f"💀 {enemy.name}({enemy.faction[:3]}) 冲阵阵亡")
 						u._collision_partner  = enemy.uid
@@ -291,12 +288,6 @@ class GameState:
 				dl = self._calc_damage(l, w, all_alive)
 				l.take_damage(dw); w.take_damage(dl)
 				log.append(f"💥 碰撞互攻：{w.name}↔{l.name}  互伤{dw}/{dl}")
-				if dw == 0 and self.effective_atk(w) > 0:
-					l.kills += 1
-					log.append(f"⭐ {l.name} 防住攻击！+1经验({l.kills})")
-				if dl == 0 and self.effective_atk(l) > 0:
-					w.kills += 1
-					log.append(f"⭐ {w.name} 防住攻击！+1经验({w.kills})")
 				w._collision_partner = l.uid; l._collision_partner = w.uid
 				self.last_attack_events.append((w.uid, l.uid, False, True))
 				self.last_attack_events.append((l.uid, w.uid, False, True))
@@ -304,18 +295,12 @@ class GameState:
 				d = self._calc_damage(w, l, all_alive)
 				l.take_damage(d)
 				log.append(f"💥 碰撞：{w.name}→{l.name}  伤{d}")
-				if d == 0 and self.effective_atk(w) > 0:
-					l.kills += 1
-					log.append(f"⭐ {l.name} 防住攻击！+1经验({l.kills})")
 				w._collision_partner = l.uid; l._collision_partner = w.uid
 				self.last_attack_events.append((w.uid, l.uid, False, True))
 			elif l_atk:
 				d = self._calc_damage(l, w, all_alive)
 				w.take_damage(d)
 				log.append(f"💥 碰撞：{l.name}→{w.name}  伤{d}")
-				if d == 0 and self.effective_atk(l) > 0:
-					w.kills += 1
-					log.append(f"⭐ {w.name} 防住攻击！+1经验({w.kills})")
 				w._collision_partner = l.uid; l._collision_partner = w.uid
 				self.last_attack_events.append((l.uid, w.uid, False, True))
 			else:
@@ -335,6 +320,8 @@ class GameState:
 
 		attackers = [u for u in all_alive
 			if u.planned_action != ACT_DEFEND and not u.is_embryo]
+		import random as _rnd
+		_rnd.shuffle(attackers)
 		attackers.sort(key=lambda u: self.effective_spd(u), reverse=True)
 
 		processed = set()
@@ -374,16 +361,6 @@ class GameState:
 				target.pending_dmg += dmg
 				log.append(f"⚔️ {atk.name}({atk.faction[:3]}) → {target.name}  伤{dmg}")
 				self.last_attack_events.append((atk.uid, target.uid, atk.ranged, False))
-				# 非同速单向攻击：不锁定，慢速方稍后仍可攻击快速方
-			# 防住判定（dmg=0 但攻击有效）：防守方 +1 经验
-			if dmg == 0 and self.effective_atk(atk) > 0:
-				target.kills += 1
-				log.append(f"⭐ {target.name} 防住攻击！+1经验({target.kills})")
-			if t_atks_back:
-				dmg2_val = self._calc_damage(target, atk, all_alive) if t_atks_back else 0
-				if dmg2_val == 0 and self.effective_atk(target) > 0:
-					atk.kills += 1
-					log.append(f"⭐ {atk.name} 防住反攻！+1经验({atk.kills})")
 
 		for u in self.alive_units():
 			if u.pending_dmg > 0:
@@ -393,14 +370,33 @@ class GameState:
 				if u.dead:
 					log.append(f"💀 {u.name}({u.faction[:3]}) 阵亡")
 
-		# 噬溃
+		# 噬溃：本回合攻击目标死亡则回复1HP
 		for atk in attackers:
 			if atk.dead or not atk.has_trait("噬溃"):
 				continue
-			t = self._auto_find_target_raw(atk, self.units)
-			if t and t.dead:
-				atk.heal(2)
-				log.append(f"🩸 噬溃：{atk.name} +2HP → {atk.hp}HP")
+			# 找本回合攻击的目标（已攻击且死亡）
+			atk_evts = [e for e in self.last_attack_events if e[0] == atk.uid and not e[2]]
+			for _, tgt_uid, _, _ in atk_evts:
+				tgt = self.get_unit_by_uid(tgt_uid)
+				if tgt and tgt.dead:
+					atk.heal(1)
+					log.append(f"🩸 噬溃：{atk.name} +1HP → {atk.hp}HP")
+					break
+
+		# 列阵协同：打死敌方时，相邻己方列阵单位各+1经验
+		for atk in attackers:
+			if atk.dead or not atk.has_trait("列阵"):
+				continue
+			atk_evts = [e for e in self.last_attack_events if e[0] == atk.uid and not e[2]]
+			killed = any(
+				self.get_unit_by_uid(tid) and self.get_unit_by_uid(tid).dead
+				for _, tid, _, _ in atk_evts
+			)
+			if killed:
+				for nb in adjacent_units(atk, self.alive_units()):
+					if nb.faction == atk.faction and nb.has_trait("列阵") and nb.level < 3:
+						nb.kills += 1
+						log.append(f"🛡 列阵协同：{nb.name} +1经验({nb.kills})")
 
 		# 威压
 		for atk in attackers:
@@ -515,17 +511,28 @@ class GameState:
 				u.dead = True
 
 	def _check_evolution(self, log):
-		# 每2回合：存活单位获得+1经验（不含胚体、3级）
-		if self.turn % 2 == 0:
-			for u in self.alive_units():
-				if not u.is_embryo and u.level < 3:
-					u.kills += 1
-					log.append(f"⏱️ {u.name} 存活奖励 +1经验({u.kills})")
+		# 每4回合：每方经验最高且未达进化门槛的单位额外+1经验
+		if self.turn % 4 == 0:
+			for faction in (FACTION_RED, FACTION_DIS):
+				fname = "红方" if faction == FACTION_RED else "灾方"
+				# 候选：非胚体、未到3级、尚未触发进化的单位
+				def _capped(u):
+					return (u.level == 1 and u.kills >= 1) or (u.level == 2 and u.kills >= 3)
+				cands = [
+					u for u in self.alive_units()
+					if u.faction == faction and not u.is_embryo
+					and u.level < 3 and not _capped(u)
+				]
+				if cands:
+					top = max(cands, key=lambda u: u.kills)
+					top.kills += 1
+					log.append(f"⏱️ {fname}领先奖励：{top.name} +1经验({top.kills})")
+		# 进化触发判定（1→2需1经验，2→3需3经验）
 		for u in self.alive_units():
 			if u.level == 1 and u.kills >= 1 and not hasattr(u, "_pending_evo"):
 				u._pending_evo = True
 				log.append(f"⬆️ {u.name}({u.faction[:3]}) 可进化！")
-			if u.level == 2 and u.kills >= 1 and not hasattr(u, "_pending_evo3"):
+			if u.level == 2 and u.kills >= 3 and not hasattr(u, "_pending_evo3"):
 				u._pending_evo3 = True
 				log.append(f"⬆️ {u.name}({u.faction[:3]}) 可进化3级！")
 
@@ -537,9 +544,8 @@ class GameState:
 		old = u.name
 		u.name     = target_name
 		u.level    = tmpl["level"]
-		hp_bonus   = tmpl["max_hp"] - u.max_hp
 		u.max_hp   = tmpl["max_hp"]
-		u.hp       = min(u.max_hp, u.hp + max(0, hp_bonus))
+		u.hp       = u.max_hp          # 进化补满HP
 		u.base_atk = tmpl["atk"]
 		u.base_spd = tmpl["spd"]
 		u.trait    = tmpl["trait"]
@@ -548,7 +554,18 @@ class GameState:
 		for a in ("_pending_evo", "_pending_evo3"):
 			if hasattr(u, a):
 				delattr(u, a)
-		self.log.append(f"✨ {old}({u.faction[:3]}) → {target_name}！")
+		self.log.append(f"✨ {old}({u.faction[:3]}) → {target_name}！HP补满({u.max_hp})")
+
+	def skip_evolution(self, uid):
+		"""不进化，只补满HP"""
+		u = self.get_unit_by_uid(uid)
+		if not u:
+			return
+		u.hp = u.max_hp
+		for a in ("_pending_evo", "_pending_evo3"):
+			if hasattr(u, a):
+				delattr(u, a)
+		self.log.append(f"💊 {u.name}({u.faction[:3]}) 保持原状，HP补满({u.max_hp})")
 
 	def _check_victory(self, log):
 		red = self.faction_units(FACTION_RED)
