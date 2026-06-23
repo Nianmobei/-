@@ -13,10 +13,15 @@ def in_bounds(x, y, gs):
 	return 0 <= x < gs and 0 <= y < gs
 
 
+def chebyshev(ax, ay, bx, by):
+	return max(abs(ax - bx), abs(ay - by))
+
+
 def adjacent_units(unit, all_units):
+	"""8方向相邻（切比雪夫距离=1，含斜向）"""
 	return [u for u in all_units
 		if not u.dead and u.uid != unit.uid
-		and manhattan(unit.x, unit.y, u.x, u.y) == 1]
+		and chebyshev(unit.x, unit.y, u.x, u.y) == 1]
 
 
 # ─────────── 占领状态 ────────────────────────
@@ -486,14 +491,14 @@ class GameState:
 			if u.faction != attacker.faction and not u.dead and not u.is_embryo]
 		rng = attacker.attack_range()
 		in_range = [e for e in enemies
-			if manhattan(attacker.x, attacker.y, e.x, e.y) <= rng]
+			if chebyshev(attacker.x, attacker.y, e.x, e.y) <= rng]
 		if not in_range:
 			return None
 		atk_pre = self._pre_pos.get(attacker.uid, (attacker.x, attacker.y))
 		def key(e):
-			post = manhattan(attacker.x, attacker.y, e.x, e.y)
+			post = chebyshev(attacker.x, attacker.y, e.x, e.y)
 			ep   = self._pre_pos.get(e.uid, (e.x, e.y))
-			pre  = manhattan(atk_pre[0], atk_pre[1], ep[0], ep[1])
+			pre  = chebyshev(atk_pre[0], atk_pre[1], ep[0], ep[1])
 			return (post, pre)
 		in_range.sort(key=key)
 		return in_range[0]
@@ -504,14 +509,14 @@ class GameState:
 			if u.faction != attacker.faction and not u.dead and not u.is_embryo]
 		rng = attacker.attack_range()
 		in_range = [e for e in enemies
-			if manhattan(attacker.x, attacker.y, e.x, e.y) <= rng]
+			if chebyshev(attacker.x, attacker.y, e.x, e.y) <= rng]
 		if not in_range:
 			return None
 		atk_pre = self._pre_pos.get(attacker.uid, (attacker.x, attacker.y))
 		def key(e):
-			post = manhattan(attacker.x, attacker.y, e.x, e.y)
+			post = chebyshev(attacker.x, attacker.y, e.x, e.y)
 			ep   = self._pre_pos.get(e.uid, (e.x, e.y))
-			pre  = manhattan(atk_pre[0], atk_pre[1], ep[0], ep[1])
+			pre  = chebyshev(atk_pre[0], atk_pre[1], ep[0], ep[1])
 			return (post, pre)
 		in_range.sort(key=key)
 		for e in in_range:
@@ -524,10 +529,10 @@ class GameState:
 			if u.faction != attacker.faction and not u.is_embryo]
 		rng = attacker.attack_range()
 		in_range = [e for e in enemies
-			if manhattan(attacker.x, attacker.y, e.x, e.y) <= rng]
+			if chebyshev(attacker.x, attacker.y, e.x, e.y) <= rng]
 		if not in_range:
 			return None
-		in_range.sort(key=lambda e: manhattan(attacker.x, attacker.y, e.x, e.y))
+		in_range.sort(key=lambda e: chebyshev(attacker.x, attacker.y, e.x, e.y))
 		return in_range[0]
 
 	def _calc_damage(self, attacker, defender, all_alive):
@@ -538,7 +543,7 @@ class GameState:
 		for a in all_alive:
 			if (a.faction == attacker.faction and a.has_trait("战旗")
 					and a.uid != attacker.uid
-					and manhattan(attacker.x, attacker.y, a.x, a.y) <= 2):
+					and chebyshev(attacker.x, attacker.y, a.x, a.y) <= 2):
 				atk += 1; break
 		# 防御减免
 		def_bonus = 0

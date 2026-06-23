@@ -202,7 +202,7 @@ class UIState:
 		rng = u.attack_range()
 		for ax in range(gs):
 			for ay in range(gs):
-				d = abs(ax - u.x) + abs(ay - u.y)
+				d = max(abs(ax - u.x), abs(ay - u.y))   # Chebyshev 8方向
 				if 1 <= d <= rng:
 					self.attack_hints.add((ax, ay))
 

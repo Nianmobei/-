@@ -193,6 +193,12 @@ class Renderer:
 					self._text_on(target, rx + 4, ry + cs - 13, "高",
 						self.fonts["tiny"], (255, 210, 80))
 
+				# 底图盾形标注：当前格有防御状态的单位
+				defending_here = [u for u in game.units_at(cx, cy)
+					if u.planned_action == ACT_DEFEND and not u.dead]
+				if defending_here:
+					self._draw_shield_floor(target, rx, ry, cs, defending_here[0].faction)
+
 				# 棋子
 				self._draw_units_in_cell(
 					game.units_at(cx, cy), rx, ry, game, ui, anim, cs, target)
@@ -409,8 +415,28 @@ class Renderer:
 		pygame.draw.polygon(s, (*color, alpha), [p1, p2, p3])
 		self.screen.blit(s, (0, 0))
 
+	def _draw_shield_floor(self, target, rx, ry, cs, faction):
+		"""在格子底图中央绘制半透明盾形，标注防御状态"""
+		col = C_RED if faction == FACTION_RED else C_DIS
+		w   = int(cs * 0.30)
+		h   = int(cs * 0.38)
+		lx  = cs // 2 - w
+		ly  = cs // 2 - h // 2
+		rect_h = h * 6 // 10
+		s = _alpha_surf(cs, cs)
+		# 上半矩形填充
+		pygame.draw.rect(s, (*col, 55), (lx, ly + 4, w * 2, rect_h))
+		# 下部尖角填充
+		p1 = (cs // 2,       ly + 4 + rect_h + h * 5 // 10)
+		p2 = (lx,            ly + 4 + rect_h)
+		p3 = (lx + w * 2,    ly + 4 + rect_h)
+		pygame.draw.polygon(s, (*col, 55), [p1, p2, p3])
+		# 描边
+		pygame.draw.rect(s, (*col, 140), (lx, ly + 4, w * 2, rect_h), 2)
+		pygame.draw.polygon(s, (*col, 140), [p1, p2, p3], 2)
+		target.blit(s, (rx, ry))
+
 	def _draw_dashed_line(self, x1, y1, x2, y2, color, alpha, dash=6):
-		dx, dy = x2 - x1, y2 - y1
 		length = math.hypot(dx, dy)
 		if length == 0:
 			return

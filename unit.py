@@ -92,7 +92,7 @@ class Unit:
 
 	def clear_turn_state(self):
 		self.planned_dir    = DIR_NONE
-		self.planned_action = ACT_NONE
+		# planned_action 继承上回合（不清空），玩家手动修改才变化
 		self.pending_dmg    = 0
 		self.defending      = False
 		self.did_move       = False
