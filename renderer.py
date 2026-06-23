@@ -320,36 +320,80 @@ class Renderer:
 			return
 		cfg = game.cfg
 		pal = self._palette(ui)
+		cs  = cfg.cell_size
 
 		for u in game.alive_units():
 			if u.is_embryo or u.uid == ui.dragging_uid:
 				continue
 			ux, uy = cfg.cell_center(u.x, u.y)
 
-			# 移动预览箭头
+			# 移动预览：目标格地面透明箭头（贴地，不画连线）
 			if u.planned_dir != DIR_NONE:
 				dx, dy = u.planned_dir
 				tx, ty = cfg.cell_center(u.x + dx, u.y + dy)
-				# 线
-				self._draw_dashed_line(ux, uy - 5, tx, ty - 5, pal["accent"], 100)
-				# 箭头头
-				self._draw_arrow_head(tx, ty - 5, ux, uy - 5, pal["accent"], 80)
+				fc = C_RED if u.faction == FACTION_RED else C_DIS
+				# 地面填色格
+				rx = cfg.board_offset_x + (u.x + dx) * cs
+				ry = cfg.board_offset_y + (u.y + dy) * cs
+				s = _alpha_surf(cs, cs)
+				s.fill((*fc, 28))
+				self.screen.blit(s, (rx, ry))
+				# 贴地大箭头（指向目标格中心）
+				self._draw_ground_arrow(tx, ty, ux, uy, fc, 120, size=int(cs * 0.28))
 				# 幽灵棋子
-				radius = max(6, int(14 * cfg.cell_size / 110))
+				radius = max(6, int(14 * cs / 110))
 				gs2 = _alpha_surf(radius * 2 + 2, radius * 2 + 2)
-				fc  = C_RED if u.faction == FACTION_RED else C_DIS
 				pygame.draw.circle(gs2, (*fc, 55), (radius + 1, radius + 1), radius)
 				pygame.draw.circle(gs2, (*C_WHITE, 80), (radius + 1, radius + 1), radius, 1)
 				self.screen.blit(gs2, (tx - radius - 1, ty - radius - 6))
 
-			# 自动攻击预测（红虚线，只显示当前操控方）
+			# 攻击预测：抛物线弧形虚线（当前操控方）
 			cur_faction = FACTION_RED if ui.phase in ("p1_plan", "p1_done") else FACTION_DIS
 			if u.faction == cur_faction:
 				t = game.predict_attack_target(u)
 				if t:
 					tx2, ty2 = cfg.cell_center(t.x, t.y)
-					self._draw_dashed_line(ux, uy - 5, tx2, ty2 - 5, C_ATK_PREV, 70, dash=4)
-					self._draw_arrow_head(tx2, ty2 - 5, ux, uy - 5, C_ATK_PREV, 60)
+					self._draw_arc_dashed(ux, uy - 5, tx2, ty2 - 5, C_ATK_PREV, 85)
+					self._draw_arrow_head(tx2, ty2 - 5, ux, uy - 5, C_ATK_PREV, 70)
+
+	def _draw_ground_arrow(self, tip_x, tip_y, from_x, from_y, color, alpha, size=18):
+		"""贴地大三角箭头，指向目标格中心"""
+		dx, dy = tip_x - from_x, tip_y - from_y
+		dist   = math.hypot(dx, dy)
+		if dist < 0.1:
+			return
+		ux, uy = dx / dist, dy / dist
+		px, py = -uy, ux
+		p1 = (tip_x, tip_y)
+		p2 = (tip_x - ux * size + px * size * 0.55, tip_y - uy * size + py * size * 0.55)
+		p3 = (tip_x - ux * size - px * size * 0.55, tip_y - uy * size - py * size * 0.55)
+		s = _alpha_surf(self.screen.get_width(), self.screen.get_height())
+		pygame.draw.polygon(s, (*color, alpha), [p1, p2, p3])
+		self.screen.blit(s, (0, 0))
+
+	def _draw_arc_dashed(self, x1, y1, x2, y2, color, alpha, n=22):
+		"""抛物线弧形虚线：控制点偏向左侧，呈抛射弧"""
+		dx, dy = x2 - x1, y2 - y1
+		dist   = math.hypot(dx, dy)
+		if dist < 0.1:
+			return
+		# 垂直于方向的左侧偏移作为控制点
+		perp_x = -dy / dist
+		perp_y =  dx / dist
+		mid_x  = (x1 + x2) / 2 + perp_x * dist * 0.38
+		mid_y  = (y1 + y2) / 2 + perp_y * dist * 0.38
+		# 采样二次贝塞尔曲线上的点
+		pts = []
+		for i in range(n + 1):
+			t  = i / n
+			bx = (1-t)**2 * x1 + 2*(1-t)*t * mid_x + t**2 * x2
+			by = (1-t)**2 * y1 + 2*(1-t)*t * mid_y + t**2 * y2
+			pts.append((int(bx), int(by)))
+		# 虚线：隔一段画一段
+		surf = _alpha_surf(self.screen.get_width(), self.screen.get_height())
+		for i in range(0, len(pts) - 1, 2):
+			pygame.draw.line(surf, (*color, alpha), pts[i], pts[i + 1], 2)
+		self.screen.blit(surf, (0, 0))
 
 	def _draw_arrow_head(self, tip_x, tip_y, from_x, from_y, color, alpha, size=7):
 		dx, dy = tip_x - from_x, tip_y - from_y

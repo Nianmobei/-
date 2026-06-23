@@ -235,33 +235,84 @@ class GameState:
 				nx, ny = u.x, u.y
 			intent[u.uid] = (nx, ny)
 
-		# 冲突处理：先处理同格情况
-		# ① 敌方同格：速度高者留，低者退，记录碰撞对
-		# ② 友方同格：速度高者留，低者退（不结算战斗）
+		# 冲突处理：区分"静止单位被进入"和"多单位同时移向空格"
+		# 静止单位（intent == 当前位置）视为不可穿越障碍，移动者强制退回
 		dest_map = defaultdict(list)
 		for uid, pos in intent.items():
 			dest_map[pos].append(uid)
 
 		final = dict(intent)
 		collision_pairs = []
+		pushed_by_friendly = set()   # 被友方挡住的移动单位uid，用于后续绕路
 
 		for pos, uids in dest_map.items():
 			if len(uids) < 2:
 				continue
 			units_here = [self.get_unit_by_uid(uid) for uid in uids]
-			# 必须有至少一个是真正在移动的（否则原本就同格，跳过）
-			if not any(intent[u.uid] != (u.x, u.y) for u in units_here):
+			# 区分：已在该格静止的单位 vs 正在移动进来的单位
+			static  = [u for u in units_here if (u.x, u.y) == pos]
+			movers  = [u for u in units_here if (u.x, u.y) != pos]
+			if not movers:
+				continue   # 都是原地单位，无需处理
+
+			if static:
+				# 有单位静止占据此格 → 所有移动者退回原位
+				for mv in movers:
+					final[mv.uid] = (mv.x, mv.y)
+					for st in static:
+						if st.faction != mv.faction:
+							collision_pairs.append((st.uid, mv.uid))
+						else:
+							pushed_by_friendly.add(mv.uid)
+				if movers:
+					log.append(f"↩️ 挡路：{', '.join(m.name for m in movers)} 被占格单位阻挡")
+			else:
+				# 多个单位同时移向同一空格 → 速度高者留，低者退
+				random.shuffle(units_here)
+				units_here.sort(key=lambda u: self.effective_spd(u), reverse=True)
+				winner = units_here[0]
+				for loser in units_here[1:]:
+					final[loser.uid] = (loser.x, loser.y)
+					log.append(f"↩️ 挤开：{loser.name} 被挤回原位")
+					if winner.faction != loser.faction:
+						collision_pairs.append((winner.uid, loser.uid))
+					else:
+						pushed_by_friendly.add(loser.uid)
+
+		# 问题4：被友方挡住的单位自动绕路到相邻可用格
+		occupied_final = set(final[u.uid] for u in self.alive_units())
+		for uid in pushed_by_friendly:
+			u = self.get_unit_by_uid(uid)
+			if not u:
 				continue
-			# 同速随机打乱，避免 uid 顺序造成系统性偏差
-			random.shuffle(units_here)
-			units_here.sort(key=lambda u: self.effective_spd(u), reverse=True)
-			winner = units_here[0]
-			for loser in units_here[1:]:
-				final[loser.uid] = (loser.x, loser.y)
-				log.append(f"↩️ 挤开：{loser.name} 被挤回原位")
-				# 只有敌方对撞才记录碰撞
-				if winner.faction != loser.faction:
-					collision_pairs.append((winner.uid, loser.uid))
+			# 只在原地时才绕路（已经有其他冲突处理把它定位原地）
+			if final[uid] != (u.x, u.y):
+				continue
+			# 按曼哈顿距离优先：先试计划移动方向的相邻格
+			pdx, pdy = u.planned_dir
+			candidates = []
+			for ddx, ddy in [(pdx, pdy), (1,0),(-1,0),(0,1),(0,-1)]:
+				if ddx == 0 and ddy == 0:
+					continue
+				nx, ny = u.x + ddx, u.y + ddy
+				if not in_bounds(nx, ny, gs):
+					continue
+				if (nx, ny) in occupied_final:
+					continue
+				# 不能进入敌方占领格（友方绕路用）
+				enemy_there = any(
+					eu.x == nx and eu.y == ny
+					for eu in self.alive_units()
+					if eu.faction != u.faction and eu.uid != u.uid
+				)
+				if enemy_there:
+					continue
+				candidates.append((nx, ny))
+			if candidates:
+				nx, ny = candidates[0]
+				final[uid] = (nx, ny)
+				occupied_final.add((nx, ny))
+				log.append(f"↪️ 绕路：{u.name} 自动移至({nx},{ny})")
 
 		for u in self.alive_units():
 			tx, ty = final[u.uid]
@@ -491,6 +542,9 @@ class GameState:
 				atk += 1; break
 		# 防御减免
 		def_bonus = 0
+		# 3级单位固有防御+1（精英单位不可被1级兵轻易击杀）
+		if defender.level >= 3:
+			def_bonus += 1
 		if defender.has_trait("硬壳"):
 			def_bonus += 1
 		if defender.has_trait("列阵") and not defender.did_move:

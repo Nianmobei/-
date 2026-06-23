@@ -12,12 +12,12 @@ UNIT_TEMPLATES = {
 	# 2级
 	"盾卫":   dict(faction=FACTION_RED, level=2, max_hp=6, atk=2, spd=2, trait="铁壁",  ranged=False, can_make=False),
 	"弩卫":   dict(faction=FACTION_RED, level=2, max_hp=5, atk=2, spd=3, trait="劲弩",  ranged=True,  can_make=False),
-	# 3级 A路（精锐化）
+	# 3级 A路（精锐化）——速度封顶3，固有防+1由_calc_damage处理
 	"盾卫3A": dict(faction=FACTION_RED, level=3, max_hp=8, atk=3, spd=2, trait="铁壁",  ranged=False, can_make=False),
 	"弩卫3A": dict(faction=FACTION_RED, level=3, max_hp=7, atk=3, spd=3, trait="劲弩",  ranged=True,  can_make=False),
-	# 3级 B路（突破化）
+	# 3级 B路（突破化）——战车冲阵速度3（原5，9×9棋盘过强）
 	"旗卫":   dict(faction=FACTION_RED, level=3, max_hp=8, atk=4, spd=3, trait="战旗",  ranged=False, can_make=False),
-	"战车":   dict(faction=FACTION_RED, level=3, max_hp=7, atk=2, spd=5, trait="冲阵",  ranged=False, can_make=False),
+	"战车":   dict(faction=FACTION_RED, level=3, max_hp=7, atk=2, spd=3, trait="冲阵",  ranged=False, can_make=False),
 	# ── 灾兽 ──────────────────────────────────────
 	# 1级
 	"散兽":   dict(faction=FACTION_DIS, level=1, max_hp=3, atk=2, spd=1, trait="噬溃",  ranged=False, can_make=False),
