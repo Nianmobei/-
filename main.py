@@ -123,19 +123,24 @@ def main():
 			elif signal == "new_round":
 				for u in game.alive_units():
 					u.clear_turn_state()
-				ui.phase = "p1_plan"
+				# 红方回合开始：先弹进化，再规划
+				ui.begin_turn(game, FACTION_RED)
+
+			elif signal == "begin_dis_turn":
+				# 灾方回合开始：先弹进化，再规划
+				ui.begin_turn(game, FACTION_DIS)
 
 		# 动画更新（每帧）
 		if ui.phase == "animating":
 			done = anim.update(dt, game)
 			if done:
-				ui.phase = "result"
-				ui.queue_evolutions(game)
 				if game.winner:
 					ui.phase = "game_over"
 					wname = "红骑士团" if game.winner == FACTION_RED else "灾兽群"
 					ui.show_phase_banner = True
 					ui.banner_text = f"🏆 {wname} 获胜！  {game.win_reason}  |  关闭窗口退出"
+				else:
+					ui.phase = "result"
 
 		renderer.draw(game, ui, anim if anim.is_playing else None)
 		pygame.display.flip()

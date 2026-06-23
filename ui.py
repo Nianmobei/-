@@ -69,7 +69,8 @@ class UIState:
 
 		# 确认按钮
 		bw, bh = 130, 38
-		self.confirm_btn_rect = pygame.Rect(sw - bw - 14, sh - bh - 8, bw, bh)
+		self.confirm_btn_rect  = pygame.Rect(sw - bw - 14,         sh - bh - 8, bw, bh)
+		self.simulate_btn_rect = pygame.Rect(sw - bw * 2 - 26,     sh - bh - 8, bw, bh)
 
 	# ──────────────── 主事件入口 ──────────────────
 
@@ -82,7 +83,7 @@ class UIState:
 			if event.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
 				self.show_phase_banner = False
 				if self.phase == "p1_done":
-					self.phase = "p2_plan"
+					return "begin_dis_turn"   # main.py 触发灾方回合开始（含进化）
 			return None
 
 		if self.phase in ("game_over", "animating"):
@@ -114,6 +115,11 @@ class UIState:
 
 		if self.confirm_btn_rect.collidepoint(mx, my):
 			return self._on_confirm(game)
+
+		# 模拟按钮：AI 代操当前阵营并自动确认
+		if (self.simulate_btn_rect.collidepoint(mx, my)
+				and self.phase in ("p1_plan", "p2_plan")):
+			return self._on_simulate(game)
 
 		for act, label, rect in self.act_btn_rects:
 			if rect.collidepoint(mx, my):
@@ -239,6 +245,15 @@ class UIState:
 			f" {u.name} 行动：{act}"
 		)
 
+	# ──────────────── 模拟行动 ────────────────────
+
+	def _on_simulate(self, game):
+		"""AI 代操当前阵营，然后自动确认规划。"""
+		from ai import ai_plan
+		faction = self.current_faction()
+		ai_plan(game, faction)
+		return self._on_confirm(game)
+
 	# ──────────────── 阶段推进 ────────────────────
 
 	def _on_confirm(self, game):
@@ -252,9 +267,6 @@ class UIState:
 			self.phase = "p2_done"
 			return "execute"
 		elif self.phase in ("p2_done", "result"):
-			if self.pending_evo_uids:
-				self._open_evo_popup(game)
-				return None
 			return "new_round"
 		return None
 
@@ -269,9 +281,22 @@ class UIState:
 
 	# ──────────────── 进化悬浮面板 ──────────────────
 
-	def queue_evolutions(self, game):
+	def begin_turn(self, game, faction):
+		"""回合开始：先弹出该阵营的进化选择，选完后进入规划阶段。"""
+		plan_phase = "p1_plan" if faction == FACTION_RED else "p2_plan"
+		evo_phase  = "evo_p1"  if faction == FACTION_RED else "evo_p2"
+		self.queue_evolutions(game, faction)
+		if self.pending_evo_uids:
+			self.phase = evo_phase
+		else:
+			self.phase = plan_phase
+
+	def queue_evolutions(self, game, faction=None):
+		"""收集指定阵营（或全部）有进化待选的单位，如有则开启弹窗。"""
 		self.pending_evo_uids = []
 		for u in game.alive_units():
+			if faction and u.faction != faction:
+				continue
 			if hasattr(u, "_pending_evo") or hasattr(u, "_pending_evo3"):
 				self.pending_evo_uids.append(u.uid)
 		if self.pending_evo_uids:
@@ -355,16 +380,30 @@ class UIState:
 
 	def _apply_evo(self, idx, game):
 		uid = self.evo_uid
-		if idx == 2:
-			game.skip_evolution(uid)
-		else:
-			opt = self.evo_options[idx]
-			game.evolve_unit(uid, opt["name"])
+		u   = game.get_unit_by_uid(uid)
+		if u:
+			# 存储进化计划，不立即变形（双盲：执行回合首步才生效）
+			if idx == 2:
+				u._evo_plan = ""           # 选择不进化
+			else:
+				u._evo_plan = self.evo_options[idx]["name"]
+			# 清除 pending 标记（已做出选择）
+			for attr in ("_pending_evo", "_pending_evo3"):
+				if hasattr(u, attr):
+					delattr(u, attr)
 		self.evo_uid = None
 		self.evo_btn_rects.clear()
 		self.pending_evo_uids.pop(0)
 		if self.pending_evo_uids:
 			self._open_evo_popup(game)
+		else:
+			# 该阵营所有进化选完，进入规划阶段
+			if self.phase == "evo_p1":
+				self.phase = "p1_plan"
+			elif self.phase == "evo_p2":
+				self.phase = "p2_plan"
 
 	def current_faction(self):
-		return FACTION_RED if self.phase in ("p1_plan", "p1_done") else FACTION_DIS
+		if self.phase in ("p1_plan", "p1_done", "evo_p1"):
+			return FACTION_RED
+		return FACTION_DIS

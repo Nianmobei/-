@@ -77,6 +77,10 @@ class Renderer:
 		self._pulse_t = 0.0   # 脉冲时钟
 
 	def _palette(self, ui):
+		if ui.phase == "evo_p1":
+			return PHASE_PALETTE["p1_plan"]
+		if ui.phase == "evo_p2":
+			return PHASE_PALETTE["p2_plan"]
 		return PHASE_PALETTE.get(ui.phase, _DEFAULT_PALETTE)
 
 	# ──────────────────── 主入口 ─────────────────────
@@ -314,13 +318,16 @@ class Renderer:
 			self._text_on(target, scx + radius - 2, scy - radius + 2, icon,
 				self.fonts["tiny"], C_GOLD)
 
-		# 进化可用提示（金色星形环）
-		if hasattr(u, "_pending_evo") or hasattr(u, "_pending_evo3"):
-			pulse2 = 0.5 + 0.5 * math.sin(self._pulse_t * 1.8 + u.uid)
+		# 进化可用提示（金色脉冲环）或已选进化计划（绿色稳定环）
+		has_pending = hasattr(u, "_pending_evo") or hasattr(u, "_pending_evo3")
+		has_plan    = hasattr(u, "_evo_plan")
+		if has_pending or has_plan:
+			pulse2 = 0.5 + 0.5 * math.sin(self._pulse_t * 1.8 + u.uid) if has_pending else 0.8
 			evo_r  = radius + 10
 			evo_a  = int(120 * pulse2)
+			evo_col = C_GOLD if has_pending else (80, 220, 100)
 			evo_s  = _alpha_surf(evo_r * 2 + 4, evo_r * 2 + 4)
-			pygame.draw.circle(evo_s, (*C_GOLD, evo_a), (evo_r + 2, evo_r + 2), evo_r, 2)
+			pygame.draw.circle(evo_s, (*evo_col, evo_a), (evo_r + 2, evo_r + 2), evo_r, 2)
 			target.blit(evo_s, (scx - evo_r - 2, scy - evo_r - 2))
 
 	# ──────────────────── 规划覆盖层 ─────────────────
@@ -828,12 +835,20 @@ class Renderer:
 		}
 		if ui.phase in labels and btn:
 			lbl, col = labels[ui.phase]
-			# 脉冲边框
 			pulse = 0.5 + 0.5 * math.sin(self._pulse_t * 1.4)
 			border_col = _lerp_color(col, C_WHITE, pulse * 0.4)
 			pygame.draw.rect(self.screen, col, btn, border_radius=8)
 			pygame.draw.rect(self.screen, border_col, btn, 2, border_radius=8)
 			self._text(btn.centerx, btn.centery, lbl, self.fonts["bold"], C_WHITE, center=True)
+
+		# 模拟按钮（仅规划阶段显示）
+		if ui.phase in ("p1_plan", "p2_plan"):
+			sb  = ui.simulate_btn_rect
+			col = C_RED if ui.phase == "p1_plan" else C_DIS
+			pygame.draw.rect(self.screen, (30, 20, 12), sb, border_radius=8)
+			pygame.draw.rect(self.screen, col, sb, 2, border_radius=8)
+			self._text(sb.centerx, sb.centery, "AI 代操 ▶", self.fonts["bold"],
+				(180, 180, 180), center=True)
 
 	# ──────────────────── 进化悬浮面板 ──────────────────
 

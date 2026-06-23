@@ -97,7 +97,9 @@ class Unit:
 		self.defending      = False
 		self.did_move       = False
 		self.stun_move      = False
-		for attr in ("_collision_partner", "_pending_evo", "_pending_evo3", "_high_ground_bonus"):
+		# _pending_evo / _pending_evo3 保留至规划开始时弹窗处理
+		# _evo_plan 保留至 execute_turn 首步执行
+		for attr in ("_collision_partner", "_high_ground_bonus"):
 			if hasattr(self, attr):
 				delattr(self, attr)
 

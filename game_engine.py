@@ -142,11 +142,33 @@ class GameState:
 		"""规划阶段预测自动攻击目标（供 UI 预览）"""
 		self._pre_pos = {u.uid: (u.x, u.y) for u in self.alive_units()}
 		return self._auto_find_target(unit, self.alive_units())
+
 	# ─── 执行回合 ───────────────────────────────
+
+	def apply_planned_evolutions(self, log):
+		"""执行回合首步：同步应用双方在规划阶段已选定的进化计划（双盲同步）。"""
+		for u in list(self.alive_units()):
+			plan = getattr(u, "_evo_plan", None)
+			if plan is None:
+				continue
+			if plan == "":
+				self.skip_evolution(u.uid)
+			else:
+				log.append(f"⬆️ {u.name} 进化为 {plan}")
+				self.evolve_unit(u.uid, plan)
+			if hasattr(u, "_evo_plan"):
+				delattr(u, "_evo_plan")
+			# 清理剩余 pending 标记
+			for attr in ("_pending_evo", "_pending_evo3"):
+				if hasattr(u, attr):
+					delattr(u, attr)
 
 	def execute_turn(self):
 		log    = []
 		self.last_attack_events = []
+
+		# ① 首步：双方规划阶段已选的进化同步生效
+		self.apply_planned_evolutions(log)
 
 		self._pre_pos = {u.uid: (u.x, u.y) for u in self.alive_units()}
 
