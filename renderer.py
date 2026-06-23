@@ -105,10 +105,11 @@ class Renderer:
 		self._draw_drag_piece(game, ui)
 		self._draw_left_panel(game, ui, pal)
 		self._draw_right_panel(game, ui, pal)
-		self._draw_bottom_bar(game, ui, pal)
+		self._draw_bottom_bar(game, ui, pal, anim)
 		if anim and anim.is_playing:
 			self._draw_damage_tags(game, ui, anim)
 			self._draw_projectiles(game, anim)
+			self._draw_clash_overlay(game, anim)
 		if ui.evo_uid is not None:
 			self._draw_evo_popup(game, ui)
 		if ui.show_phase_banner:
@@ -265,10 +266,13 @@ class Renderer:
 		if dead_a == 0:
 			return
 
-		# 受击闪白
-		flash = anim.hit_brightness(u.uid) if anim else 0.0
+		# 受击闪白（主攻）/ 蓝闪（反击）
+		flash   = anim.hit_brightness(u.uid)     if anim else 0.0
+		c_flash = anim.counter_brightness(u.uid) if anim else 0.0
 		if flash > 0:
 			color = _lerp_color(color, (255, 255, 255), flash)
+		elif c_flash > 0:
+			color = _lerp_color(color, (80, 180, 255), c_flash)
 
 		# 脉冲光晕（当前操控方且未死亡）
 		if is_cur_faction and not u.dead and not (anim and anim.is_playing):
@@ -414,6 +418,51 @@ class Renderer:
 		s = _alpha_surf(self.screen.get_width(), self.screen.get_height())
 		pygame.draw.polygon(s, (*color, alpha), [p1, p2, p3])
 		self.screen.blit(s, (0, 0))
+
+	def _draw_clash_overlay(self, game, anim):
+		"""③ 冲突阶段：在两个碰撞单位中间绘制锁定/冲突标记"""
+		from animator import AnimPhase
+		info = anim.get_clash_pair()
+		if not info:
+			return
+		atk_uid, tgt_uid, prog = info
+		atk = game.get_unit_by_uid(atk_uid)
+		tgt = game.get_unit_by_uid(tgt_uid)
+		if not atk or not tgt:
+			return
+		cfg = game.cfg
+		ax, ay = cfg.cell_center(atk.x, atk.y)
+		tx, ty = cfg.cell_center(tgt.x, tgt.y)
+		mx = (ax + tx) / 2
+		my = (ay + ty) / 2 - 8
+
+		# 连线（红色闪烁）
+		line_alpha = int(180 * min(1.0, prog * 2))
+		ls = _alpha_surf(self.screen.get_width(), self.screen.get_height())
+		pygame.draw.line(ls, (255, 80, 40, line_alpha), (int(ax), int(ay)), (int(tx), int(ty)), 2)
+		self.screen.blit(ls, (0, 0))
+
+		# 中心符号：爆炸星形（脉冲放大）
+		pulse_r = int(14 + 8 * math.sin(prog * math.pi))
+		sym_alpha = int(220 * min(1.0, prog * 3))
+		sym_s = _alpha_surf(pulse_r * 4, pulse_r * 4)
+		cx_, cy_ = pulse_r * 2, pulse_r * 2
+		# 画8条放射线（⊕形状）
+		for angle in range(0, 360, 45):
+			rad = math.radians(angle)
+			ex  = cx_ + math.cos(rad) * pulse_r
+			ey  = cy_ + math.sin(rad) * pulse_r
+			pygame.draw.line(sym_s, (255, 200, 60, sym_alpha), (cx_, cy_), (int(ex), int(ey)), 3)
+		# 中心圆
+		pygame.draw.circle(sym_s, (255, 240, 100, sym_alpha), (cx_, cy_), pulse_r // 3)
+		self.screen.blit(sym_s, (int(mx) - pulse_r * 2, int(my) - pulse_r * 2))
+
+		# "⚔" 文字标注
+		if prog > 0.3:
+			txt_alpha = int(255 * min(1.0, (prog - 0.3) / 0.4))
+			ts = self.fonts["bold"].render("⚔ 冲突", True, (255, 220, 60))
+			ts.set_alpha(txt_alpha)
+			self.screen.blit(ts, (int(mx) - ts.get_width() // 2, int(my) - pulse_r * 2 - 20))
 
 	def _draw_shield_floor(self, target, rx, ry, cs, faction):
 		"""在格子底图中央绘制半透明盾形，标注防御状态"""
@@ -741,7 +790,7 @@ class Renderer:
 
 	# ──────────────────── 底部操作栏 ─────────────────
 
-	def _draw_bottom_bar(self, game, ui, pal):
+	def _draw_bottom_bar(self, game, ui, pal, anim=None):
 		cfg = game.cfg
 		by  = cfg.board_offset_y + cfg.grid_size * cfg.cell_size + 6
 		bh  = 58
@@ -761,6 +810,12 @@ class Renderer:
 		}
 		title, sub = phase_lines.get(ui.phase, ("", ""))
 		self._text(12, by + 7, title, self.fonts["bold"], pal["accent"])
+		# 执行中阶段：叠加动画阶段标签
+		if ui.phase == "animating" and anim:
+			stage = anim.stage_label()
+			if stage:
+				self._text(12 + self.fonts["bold"].size("【执行中…】")[0] + 10,
+					by + 7, f"— {stage}", self.fonts["small"], C_GOLD)
 		if sub:
 			self._text(12, by + 28, sub, self.fonts["tiny"], C_GRAY)
 
@@ -880,4 +935,3 @@ class Renderer:
 		if text:
 			lines.append(text)
 		return lines
- 

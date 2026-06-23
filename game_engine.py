@@ -94,6 +94,8 @@ class GameState:
 		self._pre_pos: dict = {}
 		# 每回合攻击事件：list of (atk_uid, tgt_uid, is_ranged, is_collision)
 		self.last_attack_events: list = []
+		# 主攻击阶段结束边界（供动画器区分主攻 vs 反击）
+		self.last_attack_main_end: int = 0
 
 	def setup(self):
 		pos_map = self.cfg.initial_positions()
@@ -415,7 +417,7 @@ class GameState:
 
 		# 反击阶段：被攻击的存活单位进行反击
 		# 防御中 → 反击所有攻击者；未防御 → 只反击第一个攻击者
-		main_event_end = len(self.last_attack_events)   # 记录主攻击事件数量边界
+		self.last_attack_main_end = len(self.last_attack_events)   # 主攻击事件边界
 		cur_alive = self.alive_units()
 		for tgt_uid, atk_uids in attacks_received.items():
 			tgt = self.get_unit_by_uid(tgt_uid)
@@ -439,8 +441,8 @@ class GameState:
 		for atk in attackers:
 			if atk.dead or not atk.has_trait("噬溃"):
 				continue
-			# 只检查主攻击阶段的事件（main_event_end 之前）
-			atk_evts = [e for e in self.last_attack_events[:main_event_end]
+			# 只检查主攻击阶段的事件（self.last_attack_main_end 之前）
+			atk_evts = [e for e in self.last_attack_events[:self.last_attack_main_end]
 				if e[0] == atk.uid and not e[2]]
 			for _, tgt_uid, _, _ in atk_evts:
 				tgt = self.get_unit_by_uid(tgt_uid)

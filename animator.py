@@ -1,5 +1,9 @@
-# 血轨：动画管理器 v4
-# 严格串行：MOVE → SETTLE → (LUNGE→RECOIL)×N对 → RANGED → DAMAGE → DONE
+# 血轨：动画管理器 v5
+# 四阶段严格串行：
+#   ① RANGED  — 远程弹道（移动前，原位射击）
+#   ② MOVE    — 棋子位移
+#   ③ CLASH   — 碰撞冲突（锁定标记 + 互攻）
+#   ④ COMBAT  — 主攻 LUNGE/RECOIL；反击 COUNTER_LUNGE/COUNTER_RECOIL
 # 每对战斗独立播放，绝不同时
 
 import math
@@ -17,15 +21,33 @@ def _ease_out_back(t: float) -> float:
 
 
 class AnimPhase:
-	IDLE    = "idle"
-	MOVE    = "move"      # 0.30s：无冲突单位滑到位
-	SETTLE  = "settle"    # 0.10s：所有单位落位停顿
-	LUNGE   = "lunge"     # 0.20s：当前对的攻击方冲向防守方
-	RECOIL  = "recoil"    # 0.18s：防守方弹退回位
-	GAP     = "gap"       # 0.06s：对间间隔
-	RANGED  = "ranged"    # 0.38s：远程抛射体飞行
-	DAMAGE  = "damage"    # 0.70s：所有伤害数字浮起
-	DONE    = "done"
+	IDLE           = "idle"
+	RANGED         = "ranged"          # ① 远程弹道
+	MOVE           = "move"            # ② 棋子位移  0.30s
+	SETTLE         = "settle"          # 移动后停顿  0.10s
+	CLASH_MARK     = "clash_mark"      # ③ 冲突锁定标记  0.28s
+	LUNGE          = "lunge"           # 近战冲刺    0.20s
+	RECOIL         = "recoil"          # 弹退         0.18s
+	GAP            = "gap"             # 对间停顿    0.06s
+	COUNTER_LUNGE  = "counter_lunge"   # ④ 反击冲刺  0.18s
+	COUNTER_RECOIL = "counter_recoil"  # 反击弹退    0.15s
+	DAMAGE         = "damage"          # 伤害数字浮起 0.70s
+	DONE           = "done"
+
+
+# 阶段显示名（用于底栏标注）
+PHASE_STAGE_LABEL = {
+	AnimPhase.RANGED:         "① 远程攻击",
+	AnimPhase.MOVE:           "② 部队移动",
+	AnimPhase.SETTLE:         "② 部队移动",
+	AnimPhase.CLASH_MARK:     "③ 冲突对决",
+	AnimPhase.LUNGE:          "④ 攻击与反击",
+	AnimPhase.RECOIL:         "④ 攻击与反击",
+	AnimPhase.GAP:            "④ 攻击与反击",
+	AnimPhase.COUNTER_LUNGE:  "④ 攻击与反击",
+	AnimPhase.COUNTER_RECOIL: "④ 攻击与反击",
+	AnimPhase.DAMAGE:         "结算",
+}
 
 
 class DamageTag:
@@ -48,32 +70,35 @@ class Projectile:
 		self.hit         = False
 
 
-# 单对战斗记录
 class CombatPair:
-	def __init__(self, atk_uid, tgt_uid):
-		self.atk_uid = atk_uid
-		self.tgt_uid = tgt_uid
-		# 计算时填入
+	"""pair_type: 'collision' | 'melee' | 'counter'"""
+	def __init__(self, atk_uid, tgt_uid, pair_type="melee"):
+		self.atk_uid   = atk_uid
+		self.tgt_uid   = tgt_uid
+		self.pair_type = pair_type
 		self.atk_base  = None   # (float x, float y)
 		self.tgt_base  = None
-		self.recoil_dir = None  # (dx, dy) 归一化，tgt 弹退方向
+		self.recoil_dir = None  # 归一化 (dx, dy)，tgt 弹退方向
 
 
 class AnimationManager:
-	MOVE_DUR    = 0.30
-	SETTLE_DUR  = 0.10
-	LUNGE_DUR   = 0.20
-	RECOIL_DUR  = 0.18
-	GAP_DUR     = 0.06
-	RANGED_DUR  = 0.38
-	DAMAGE_DUR  = 0.70
+	MOVE_DUR           = 0.30
+	SETTLE_DUR         = 0.10
+	CLASH_MARK_DUR     = 0.28
+	LUNGE_DUR          = 0.20
+	RECOIL_DUR         = 0.18
+	GAP_DUR            = 0.06
+	COUNTER_LUNGE_DUR  = 0.18
+	COUNTER_RECOIL_DUR = 0.15
+	RANGED_DUR         = 0.40
+	DAMAGE_DUR         = 0.70
 
 	def __init__(self):
 		self.phase   = AnimPhase.IDLE
 		self.timer   = 0.0
 		self.visual_pos: dict  = {}
-		self.move_data: dict   = {}   # uid→(fx,fy,tx,ty) 非战斗单位
-		self.final_pos: dict   = {}   # uid→(x,y)
+		self.move_data: dict   = {}
+		self.final_pos: dict   = {}
 		self.hit_uids: set     = set()
 		self.dead_uids: set    = set()
 		self.damage_tags: list = []
@@ -81,11 +106,10 @@ class AnimationManager:
 		self.screen_shake      = 0.0
 		self.shake_intensity   = 0.0
 		self._shake_offset     = (0, 0)
-		# 串行战斗队列
-		self._pairs: list      = []   # list[CombatPair]，按顺序
+		self._pairs: list      = []
 		self._pair_idx: int    = 0
-		# 当前对的活跃闪白 uid（RECOIL阶段用）
-		self._active_hit_uid: int = -1
+		self._active_hit_uid: int     = -1   # 主攻受击（白闪）
+		self._active_counter_uid: int = -1   # 反击受击（蓝闪）
 
 	@property
 	def is_playing(self) -> bool:
@@ -96,11 +120,11 @@ class AnimationManager:
 			return self._pairs[self._pair_idx]
 		return None
 
-	# ─────────────── 初始化 ───────────────────
+	# ─────────────── 初始化 ────────────────────────
 
 	def setup(self, pre_snap: dict, game):
-		self.phase   = AnimPhase.MOVE
-		self.timer   = 0.0
+		self.phase  = AnimPhase.IDLE
+		self.timer  = 0.0
 		self.visual_pos.clear()
 		self.move_data.clear()
 		self.final_pos.clear()
@@ -110,50 +134,51 @@ class AnimationManager:
 		self.projectiles.clear()
 		self._pairs.clear()
 		self._pair_idx = 0
-		self._active_hit_uid = -1
-		self.screen_shake   = 0.0
-		self._shake_offset  = (0, 0)
+		self._active_hit_uid     = -1
+		self._active_counter_uid = -1
+		self.screen_shake  = 0.0
+		self._shake_offset = (0, 0)
 
+		# 初始视觉坐标 = 移动前位置
 		for uid, (px, py, _) in pre_snap.items():
 			self.visual_pos[uid] = (float(px), float(py))
 
-		for uid, (_, _, _) in pre_snap.items():
+		# 最终位置（移动后）
+		for uid in pre_snap:
 			u = game.get_unit_by_uid(uid)
 			if u:
 				self.final_pos[uid] = (u.x, u.y)
 
-		# 战斗 uid 集合（不参与移动动画）
-		combat_uids = set()
+		# 主攻击事件边界
+		main_end = getattr(game, "last_attack_main_end", len(game.last_attack_events))
+
+		# ── 远程抛射体（用 pre_snap 位置，移动前射击）────
+		seen_rng = set()
 		for atk_uid, tgt_uid, is_rng, _ in game.last_attack_events:
 			if not is_rng:
-				combat_uids.add(atk_uid)
-				combat_uids.add(tgt_uid)
-
-		# 非战斗移动
-		for uid, (ox, oy, _) in pre_snap.items():
-			u = game.get_unit_by_uid(uid)
-			if u and uid not in combat_uids and (u.x != ox or u.y != oy):
-				self.move_data[uid] = (ox, oy, u.x, u.y)
-
-		# 受击 / 死亡 / 伤害数字
-		for uid, (_, _, old_hp) in pre_snap.items():
-			u = game.get_unit_by_uid(uid)
-			if not u:
 				continue
-			diff = old_hp - u.hp
-			if diff > 0:
-				self.hit_uids.add(uid)
-				self.damage_tags.append(DamageTag(uid, diff, u.x, u.y))
-			if u.dead:
-				self.dead_uids.add(uid)
+			key = frozenset([atk_uid, tgt_uid])
+			if key in seen_rng:
+				continue
+			seen_rng.add(key)
+			atk = game.get_unit_by_uid(atk_uid)
+			tgt = game.get_unit_by_uid(tgt_uid)
+			if not atk or not tgt:
+				continue
+			# 用 pre_snap 坐标（移动前）
+			ax, ay = pre_snap.get(atk_uid, (atk.x, atk.y, 0))[:2]
+			tx, ty = pre_snap.get(tgt_uid, (tgt.x, tgt.y, 0))[:2]
+			is_cannon = "炮" in atk.name or atk.has_trait("投射")
+			self.projectiles.append(Projectile(
+				atk_uid, tgt_uid,
+				float(ax), float(ay), float(tx), float(ty),
+				is_cannon=is_cannon,
+			))
 
-		if self.dead_uids:
-			self.screen_shake    = 0.26
-			self.shake_intensity = min(6.0, 2.0 + len(self.dead_uids) * 1.8)
-
-		# 构建近战对队列（每对独立，严格去重）
+		# ── 近战对队列：collision → melee → counter ─────
 		seen = set()
-		for atk_uid, tgt_uid, is_rng, _ in game.last_attack_events:
+		collision_pairs, melee_pairs, counter_pairs = [], [], []
+		for i, (atk_uid, tgt_uid, is_rng, is_coll) in enumerate(game.last_attack_events):
 			if is_rng:
 				continue
 			key = (atk_uid, tgt_uid)
@@ -164,41 +189,59 @@ class AnimationManager:
 			tgt = game.get_unit_by_uid(tgt_uid)
 			if not atk or not tgt:
 				continue
-			cp = CombatPair(atk_uid, tgt_uid)
-			cp.atk_base  = (float(atk.x), float(atk.y))
-			cp.tgt_base  = (float(tgt.x), float(tgt.y))
-			# 弹退方向：目标背离攻击者
+			if is_coll:
+				ptype = "collision"
+			elif i >= main_end:
+				ptype = "counter"
+			else:
+				ptype = "melee"
+			cp = CombatPair(atk_uid, tgt_uid, ptype)
+			cp.atk_base = (float(atk.x), float(atk.y))
+			cp.tgt_base = (float(tgt.x), float(tgt.y))
 			dx = float(tgt.x) - float(atk.x)
 			dy = float(tgt.y) - float(atk.y)
 			dist = math.hypot(dx, dy)
-			if dist < 0.01:
-				dx, dy = 0.0, -1.0
+			cp.recoil_dir = (dx / dist, dy / dist) if dist > 0.01 else (0.0, -1.0)
+			if ptype == "collision":
+				collision_pairs.append(cp)
+			elif ptype == "counter":
+				counter_pairs.append(cp)
 			else:
-				dx, dy = dx / dist, dy / dist
-			cp.recoil_dir = (dx, dy)
-			self._pairs.append(cp)
+				melee_pairs.append(cp)
+		self._pairs = collision_pairs + melee_pairs + counter_pairs
 
-		# 远程抛射体
-		seen_rng = set()
-		for atk_uid, tgt_uid, is_rng, _ in game.last_attack_events:
-			if not is_rng:
-				continue
-			pair_key = frozenset([atk_uid, tgt_uid])
-			if pair_key in seen_rng:
-				continue
-			seen_rng.add(pair_key)
-			atk = game.get_unit_by_uid(atk_uid)
-			tgt = game.get_unit_by_uid(tgt_uid)
-			if atk and tgt:
-				is_cannon = "炮" in atk.name or atk.has_trait("投射")
-				self.projectiles.append(Projectile(
-					atk_uid, tgt_uid,
-					float(atk.x), float(atk.y),
-					float(tgt.x), float(tgt.y),
-					is_cannon=is_cannon,
-				))
+		# ── 非战斗单位移动数据 ────────────────────────────
+		combat_uids = {cp.atk_uid for cp in self._pairs} | {cp.tgt_uid for cp in self._pairs}
+		for uid, (ox, oy, _) in pre_snap.items():
+			u = game.get_unit_by_uid(uid)
+			if u and uid not in combat_uids and (u.x != ox or u.y != oy):
+				self.move_data[uid] = (ox, oy, u.x, u.y)
 
-	# ─────────────── 帧更新 ───────────────────
+		# ── 伤害 / 死亡 ──────────────────────────────────
+		for uid, (_, _, old_hp) in pre_snap.items():
+			u = game.get_unit_by_uid(uid)
+			if not u:
+				continue
+			diff = old_hp - u.hp
+			if diff > 0:
+				self.hit_uids.add(uid)
+				self.damage_tags.append(DamageTag(uid, diff, u.x, u.y))
+			elif diff < 0:
+				self.damage_tags.append(DamageTag(uid, abs(diff), u.x, u.y, is_heal=True))
+			if u.dead:
+				self.dead_uids.add(uid)
+
+		if self.dead_uids:
+			self.screen_shake    = 0.26
+			self.shake_intensity = min(6.0, 2.0 + len(self.dead_uids) * 1.8)
+
+		# ── 决定起始阶段 ─────────────────────────────────
+		if self.projectiles:
+			self.phase = AnimPhase.RANGED
+		else:
+			self.phase = AnimPhase.MOVE
+
+	# ─────────────── 帧更新 ────────────────────────
 
 	def update(self, dt: float, game=None) -> bool:
 		self.timer += dt
@@ -206,19 +249,30 @@ class AnimationManager:
 		# 震屏衰减
 		if self.screen_shake > 0:
 			self.screen_shake = max(0.0, self.screen_shake - dt)
-			t = self.screen_shake / 0.26
+			t   = self.screen_shake / 0.26
 			mag = self.shake_intensity * t
 			self._shake_offset = (random.uniform(-mag, mag), random.uniform(-mag, mag))
 		else:
 			self._shake_offset = (0, 0)
 
-		if self.phase == AnimPhase.MOVE:
+		# ① 远程弹道
+		if self.phase == AnimPhase.RANGED:
+			t = min(1.0, self.timer / self.RANGED_DUR)
+			for p in self.projectiles:
+				p.progress = t
+				if t >= 1.0:
+					p.hit = True
+			if self.timer >= self.RANGED_DUR:
+				self.phase = AnimPhase.MOVE
+				self.timer = 0.0
+
+		# ② 棋子位移
+		elif self.phase == AnimPhase.MOVE:
 			t  = min(1.0, self.timer / self.MOVE_DUR)
 			et = _ease_out_back(t) if t < 0.92 else _ease_out_cubic(t)
 			for uid, (fx, fy, tx, ty) in self.move_data.items():
 				self.visual_pos[uid] = (fx + (tx - fx) * et, fy + (ty - fy) * et)
 			if self.timer >= self.MOVE_DUR:
-				# 非战斗单位落位
 				combat_uids = {cp.atk_uid for cp in self._pairs} | {cp.tgt_uid for cp in self._pairs}
 				for uid, pos in self.final_pos.items():
 					if uid not in combat_uids:
@@ -228,12 +282,18 @@ class AnimationManager:
 
 		elif self.phase == AnimPhase.SETTLE:
 			if self.timer >= self.SETTLE_DUR:
-				# 战斗单位也落位（它们之前一直在原位）
 				for uid, pos in self.final_pos.items():
 					self.visual_pos[uid] = (float(pos[0]), float(pos[1]))
 				self.timer = 0.0
-				self._advance_combat_or_ranged()
+				self._start_next_pair()
 
+		# ③ 冲突锁定标记
+		elif self.phase == AnimPhase.CLASH_MARK:
+			if self.timer >= self.CLASH_MARK_DUR:
+				self.phase = AnimPhase.LUNGE
+				self.timer = 0.0
+
+		# ④ 近战冲刺（包含 collision 和 melee）
 		elif self.phase == AnimPhase.LUNGE:
 			cp = self._cur_pair()
 			if cp:
@@ -260,10 +320,7 @@ class AnimationManager:
 				knock_t = math.sin(t * math.pi)
 				bx, by  = cp.tgt_base
 				rdx, rdy = cp.recoil_dir
-				self.visual_pos[cp.tgt_uid] = (
-					bx + rdx * 0.18 * knock_t,
-					by + rdy * 0.18 * knock_t,
-				)
+				self.visual_pos[cp.tgt_uid] = (bx + rdx * 0.18 * knock_t, by + rdy * 0.18 * knock_t)
 			if self.timer >= self.RECOIL_DUR:
 				if cp:
 					self.visual_pos[cp.tgt_uid] = cp.tgt_base
@@ -275,16 +332,39 @@ class AnimationManager:
 			if self.timer >= self.GAP_DUR:
 				self._pair_idx += 1
 				self.timer = 0.0
-				self._advance_combat_or_ranged()
+				self._start_next_pair()
 
-		elif self.phase == AnimPhase.RANGED:
-			t = min(1.0, self.timer / self.RANGED_DUR)
-			for p in self.projectiles:
-				p.progress = t
-				if t >= 1.0:
-					p.hit = True
-			if self.timer >= self.RANGED_DUR:
-				self.phase = AnimPhase.DAMAGE
+		# ④ 反击冲刺
+		elif self.phase == AnimPhase.COUNTER_LUNGE:
+			cp = self._cur_pair()
+			if cp:
+				t       = min(1.0, self.timer / self.COUNTER_LUNGE_DUR)
+				lunge_t = math.sin(t * math.pi)
+				bx, by  = cp.atk_base
+				tx, ty  = cp.tgt_base
+				dx, dy  = tx - bx, ty - by
+				dist    = max(0.01, math.hypot(dx, dy))
+				self.visual_pos[cp.atk_uid] = (bx + (dx/dist)*0.22*lunge_t, by + (dy/dist)*0.22*lunge_t)
+			if self.timer >= self.COUNTER_LUNGE_DUR:
+				if cp:
+					self.visual_pos[cp.atk_uid] = cp.atk_base
+					self._active_counter_uid = cp.tgt_uid
+				self.phase = AnimPhase.COUNTER_RECOIL
+				self.timer = 0.0
+
+		elif self.phase == AnimPhase.COUNTER_RECOIL:
+			cp = self._cur_pair()
+			if cp and cp.recoil_dir:
+				t        = min(1.0, self.timer / self.COUNTER_RECOIL_DUR)
+				knock_t  = math.sin(t * math.pi)
+				bx, by   = cp.tgt_base
+				rdx, rdy = cp.recoil_dir
+				self.visual_pos[cp.tgt_uid] = (bx + rdx * 0.15 * knock_t, by + rdy * 0.15 * knock_t)
+			if self.timer >= self.COUNTER_RECOIL_DUR:
+				if cp:
+					self.visual_pos[cp.tgt_uid] = cp.tgt_base
+				self._active_counter_uid = -1
+				self.phase = AnimPhase.GAP
 				self.timer = 0.0
 
 		elif self.phase == AnimPhase.DAMAGE:
@@ -295,16 +375,21 @@ class AnimationManager:
 
 		return False
 
-	def _advance_combat_or_ranged(self):
-		"""从 SETTLE 或 GAP 后决定下一阶段"""
-		if self._pair_idx < len(self._pairs):
-			self.phase = AnimPhase.LUNGE
-		elif self.projectiles:
-			self.phase = AnimPhase.RANGED
-		else:
+	def _start_next_pair(self):
+		"""SETTLE/GAP 后推进到下一对或 DAMAGE"""
+		cp = self._cur_pair()
+		if cp is None:
 			self.phase = AnimPhase.DAMAGE
+			return
+		if cp.pair_type == "collision":
+			# 先显示锁定标记
+			self.phase = AnimPhase.CLASH_MARK
+		elif cp.pair_type == "counter":
+			self.phase = AnimPhase.COUNTER_LUNGE
+		else:
+			self.phase = AnimPhase.LUNGE
 
-	# ─────────────── 查询接口 ────────────────────
+	# ─────────────── 查询接口 ──────────────────────
 
 	def get_vpos(self, uid: int, default_x: int, default_y: int) -> tuple:
 		return self.visual_pos.get(uid, (float(default_x), float(default_y)))
@@ -312,12 +397,34 @@ class AnimationManager:
 	def get_shake(self) -> tuple:
 		return self._shake_offset
 
+	def stage_label(self) -> str:
+		return PHASE_STAGE_LABEL.get(self.phase, "")
+
+	def get_clash_pair(self):
+		"""返回当前 CLASH_MARK 阶段的对 (atk_uid, tgt_uid, progress) 或 None"""
+		if self.phase != AnimPhase.CLASH_MARK:
+			return None
+		cp = self._cur_pair()
+		if not cp:
+			return None
+		prog = min(1.0, self.timer / self.CLASH_MARK_DUR)
+		return (cp.atk_uid, cp.tgt_uid, prog)
+
 	def hit_brightness(self, uid: int) -> float:
-		"""受击闪白：当前对的防守方在 RECOIL 阶段闪白"""
+		"""白闪（主攻受击）"""
 		if uid != self._active_hit_uid:
 			return 0.0
 		if self.phase == AnimPhase.RECOIL:
 			t = min(1.0, self.timer / self.RECOIL_DUR)
+			return max(0.0, math.sin(t * math.pi * 1.8) * (1.0 - t * 0.5))
+		return 0.0
+
+	def counter_brightness(self, uid: int) -> float:
+		"""蓝闪（反击受击）"""
+		if uid != self._active_counter_uid:
+			return 0.0
+		if self.phase == AnimPhase.COUNTER_RECOIL:
+			t = min(1.0, self.timer / self.COUNTER_RECOIL_DUR)
 			return max(0.0, math.sin(t * math.pi * 1.8) * (1.0 - t * 0.5))
 		return 0.0
 
@@ -333,9 +440,11 @@ class AnimationManager:
 		if uid not in self.dead_uids:
 			return 255
 		alive_phases = (
-			AnimPhase.MOVE, AnimPhase.SETTLE,
-			AnimPhase.LUNGE, AnimPhase.RECOIL, AnimPhase.GAP,
 			AnimPhase.RANGED,
+			AnimPhase.MOVE, AnimPhase.SETTLE,
+			AnimPhase.CLASH_MARK,
+			AnimPhase.LUNGE, AnimPhase.RECOIL, AnimPhase.GAP,
+			AnimPhase.COUNTER_LUNGE, AnimPhase.COUNTER_RECOIL,
 		)
 		if self.phase in alive_phases:
 			return 200
@@ -346,6 +455,6 @@ class AnimationManager:
 
 	def current_lunge_uids(self) -> set:
 		cp = self._cur_pair()
-		if cp and self.phase == AnimPhase.LUNGE:
+		if cp and self.phase in (AnimPhase.LUNGE, AnimPhase.COUNTER_LUNGE):
 			return {cp.atk_uid}
 		return set()
