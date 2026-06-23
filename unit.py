@@ -28,7 +28,7 @@ UNIT_TEMPLATES = {
 	"甲兽3A": dict(faction=FACTION_DIS, level=3, max_hp=8, atk=3, spd=2, trait="硬壳",  ranged=False, can_make=False),
 	"炮兽3A": dict(faction=FACTION_DIS, level=3, max_hp=7, atk=3, spd=3, trait="投射",  ranged=True,  can_make=False),
 	# 3级 B路（灾化）
-	"恐兽":   dict(faction=FACTION_DIS, level=3, max_hp=8, atk=4, spd=2, trait="威压",  ranged=False, can_make=False),
+	"恐兽":   dict(faction=FACTION_DIS, level=3, max_hp=8, atk=4, spd=3, trait="威压",  ranged=False, can_make=False),
 	"猎群兽": dict(faction=FACTION_DIS, level=3, max_hp=7, atk=2, spd=3, trait="集群",  ranged=True,  can_make=False),
 	# 胚体
 	"胚体":   dict(faction=None,        level=0, max_hp=1, atk=0, spd=1, trait="",      ranged=False, can_make=False),

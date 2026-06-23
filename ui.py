@@ -184,7 +184,8 @@ class UIState:
 		gs  = cfg.grid_size
 		spd = game.effective_spd(u)
 		if u.planned_action != ACT_DEFEND:
-			if u.has_trait("冲阵"):
+			if u.has_trait("冲阵") or u.has_trait("劲弩"):
+				# 十字直线移动：只能沿上下左右直线移动（不可斜向）
 				for ddx, ddy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
 					for step in range(1, spd + 1):
 						nx, ny = u.x + ddx * step, u.y + ddy * step
