@@ -118,6 +118,8 @@ class Renderer:
 			self._draw_evo_popup(game, ui)
 		if ui.show_phase_banner:
 			self._draw_phase_banner(game, ui)
+		if getattr(ui, 'show_rules', False):
+			self._draw_rules_overlay(game)
 
 	# ──────────────────── 棋盘格 ─────────────────────
 
@@ -128,11 +130,15 @@ class Renderer:
 		ox  = cfg.board_offset_x
 		oy  = cfg.board_offset_y
 		gs  = cfg.grid_size
+		flip = cfg.view_flip
 
-		for cy in range(gs):
-			for cx in range(gs):
-				rx = ox + cx * cs
-				ry = oy + cy * cs
+		for vcy in range(gs):
+			for vcx in range(gs):
+				rx = ox + vcx * cs
+				ry = oy + vcy * cs
+				# 视觉位置对应的真实游戏坐标
+				cx = gs - 1 - vcx if flip else vcx
+				cy = gs - 1 - vcy if flip else vcy
 				rect = pygame.Rect(rx, ry, cs, cs)
 
 				terrain = cfg.terrain_at(cx, cy)
@@ -204,9 +210,14 @@ class Renderer:
 				if defending_here:
 					self._draw_shield_floor(target, rx, ry, cs, defending_here[0].faction)
 
-				# 棋子
-				self._draw_units_in_cell(
-					game.units_at(cx, cy), rx, ry, game, ui, anim, cs, target)
+				# 棋子（动画期间包含死亡单位，由 dead_alpha 控制淡出）
+				if anim and anim.is_playing:
+					cell_units = [u for u in game.units
+						if u.x == cx and u.y == cy
+						and (not u.dead or u.uid in anim.dead_uids)]
+				else:
+					cell_units = game.units_at(cx, cy)
+				self._draw_units_in_cell(cell_units, rx, ry, game, ui, anim, cs, target)
 
 	def _draw_units_in_cell(self, units, rx, ry, game, ui, anim, cs, target=None):
 		if target is None:
@@ -228,8 +239,9 @@ class Renderer:
 
 			if anim and anim.is_playing:
 				vgx, vgy = anim.get_vpos(u.uid, u.x, u.y)
-				scx = int(game.cfg.board_offset_x + vgx * cs + cs // 2)
-				scy = int(game.cfg.board_offset_y + vgy * cs + cs // 2) - 5
+				_scx, _scy = game.cfg.game_to_screen(vgx, vgy)
+				scx = _scx
+				scy = _scy - 5
 			else:
 				ox2 = (i - (n - 1) / 2) * (cs // max(n + 1, 2))
 				scx = rx + cs // 2 + int(ox2)
@@ -307,6 +319,18 @@ class Renderer:
 		fkey = "unit" if cs >= 76 else "tiny"
 		self._text_on(target, scx, scy - 3, u.name[:2], self.fonts[fkey], C_WHITE, center=True)
 
+		# HP + 经验上下叠加显示（棋子圆圈正上方）
+		if not u.is_embryo and not u.dead:
+			hp_r   = u.hp / max(u.max_hp, 1)
+			hp_col = C_HP_GREEN if hp_r > 0.45 else ((200, 160, 40) if hp_r > 0.2 else C_HP_RED)
+			# 上层：HP 数字
+			self._text_on(target, scx, scy - radius - 11,
+				f"{u.hp}/{u.max_hp}", self.fonts["tiny"], hp_col, center=True)
+			# 下层：经验进度（lv1/lv2 才显示）
+			if u.level < 3:
+				self._text_on(target, scx, scy - radius - 2,
+					str(u.kills), self.fonts["tiny"], C_GOLD, center=True)
+
 		# 等级点
 		for lv in range(u.level):
 			pygame.draw.circle(target, C_GOLD,
@@ -332,15 +356,19 @@ class Renderer:
 
 	# ──────────────────── 规划覆盖层 ─────────────────
 
-	def _draw_plan_overlays(self, game, ui):
+	def _draw_plan_overlays(self, game, ui, anim=None):
 		if ui.phase not in ("p1_plan", "p2_plan", "p1_done"):
 			return
 		cfg = game.cfg
 		pal = self._palette(ui)
 		cs  = cfg.cell_size
+		# 联机模式：只显示本方规划轨迹
+		online_faction = getattr(ui, 'online_faction', None)
 
 		for u in game.alive_units():
 			if u.is_embryo or u.uid == ui.dragging_uid:
+				continue
+			if online_faction and u.faction != online_faction:
 				continue
 			ux, uy = cfg.cell_center(u.x, u.y)
 
@@ -349,9 +377,9 @@ class Renderer:
 				dx, dy = u.planned_dir
 				tx, ty = cfg.cell_center(u.x + dx, u.y + dy)
 				fc = C_RED if u.faction == FACTION_RED else C_DIS
-				# 地面填色格
-				rx = cfg.board_offset_x + (u.x + dx) * cs
-				ry = cfg.board_offset_y + (u.y + dy) * cs
+				# 地面填色格（用 cell_center 反算左上角，兼容 view_flip）
+				rx = tx - cs // 2
+				ry = ty - cs // 2
 				s = _alpha_surf(cs, cs)
 				s.fill((*fc, 28))
 				self.screen.blit(s, (rx, ry))
@@ -365,7 +393,8 @@ class Renderer:
 				self.screen.blit(gs2, (tx - radius - 1, ty - radius - 6))
 
 			# 攻击预测：抛物线弧形虚线（当前操控方）
-			cur_faction = FACTION_RED if ui.phase in ("p1_plan", "p1_done") else FACTION_DIS
+			cur_faction = online_faction if online_faction else \
+				(FACTION_RED if ui.phase in ("p1_plan", "p1_done") else FACTION_DIS)
 			if u.faction == cur_faction:
 				t = game.predict_attack_target(u)
 				if t:
@@ -542,8 +571,8 @@ class Renderer:
 		cell = game.cfg.screen_to_cell(mx, my)
 		if cell and cell in ui.move_hints:
 			cx, cy = cell
-			rx = cfg.board_offset_x + cx * cs
-			ry = cfg.board_offset_y + cy * cs
+			_scx, _scy = cfg.cell_center(cx, cy)
+			rx, ry = _scx - cs // 2, _scy - cs // 2
 			pal = self._palette(ui)
 			hl = _alpha_surf(cs, cs)
 			hl.fill((*pal["accent_lite"], 80))
@@ -590,12 +619,9 @@ class Renderer:
 			if p.hit:
 				continue
 			t = p.progress
+			px_s, _py_s = cfg.game_to_screen(p.sx, p.sy); py_s = _py_s - 5
+			px_t, _py_t = cfg.game_to_screen(p.tx, p.ty); py_t = _py_t - 5
 			if p.is_cannon:
-				# 炮弹：抛物线弧度，较大圆形，橙黄色
-				px_s = cfg.board_offset_x + p.sx * cs + cs // 2
-				py_s = cfg.board_offset_y + p.sy * cs + cs // 2 - 5
-				px_t = cfg.board_offset_x + p.tx * cs + cs // 2
-				py_t = cfg.board_offset_y + p.ty * cs + cs // 2 - 5
 				cx   = px_s + (px_t - px_s) * t
 				# 抛物线上弧
 				arc  = -math.sin(t * math.pi) * cs * 1.2
@@ -609,10 +635,6 @@ class Renderer:
 				pygame.draw.circle(self.screen, (255, 255, 180), (int(cx), int(cy)), max(2, r // 2))
 			else:
 				# 弩箭：直线，细长，白蓝色，带尾迹
-				px_s = cfg.board_offset_x + p.sx * cs + cs // 2
-				py_s = cfg.board_offset_y + p.sy * cs + cs // 2 - 5
-				px_t = cfg.board_offset_x + p.tx * cs + cs // 2
-				py_t = cfg.board_offset_y + p.ty * cs + cs // 2 - 5
 				cx   = px_s + (px_t - px_s) * t
 				cy   = py_s + (py_t - py_s) * t
 				# 箭头方向
@@ -686,31 +708,18 @@ class Renderer:
 					(x + 4, py + 4), (x + w - 4, py + 4), 1)
 				self._draw_unit_card(x + 4, py + 8, w - 8, u, game, pal)
 
-		# 行动按钮
-		for act, label, rect in ui.act_btn_rects:
-			u = game.get_unit_by_uid(ui.selected_uid)
-			active = (u and u.planned_action == act)
-			# 根据动作类型着色
-			if act == ACT_DEFEND:
-				btn_accent = (60, 110, 200)
-			elif act == ACT_OCCUPY:
-				btn_accent = (160, 130, 40)
-			elif act == ACT_MAKE:
-				btn_accent = (80, 160, 80)
-			else:
-				btn_accent = pal["accent"]
-			bg = (*btn_accent, 70) if active else (30, 20, 12)
-			if active:
-				pygame.draw.rect(self.screen, btn_accent, rect, border_radius=5)
-			else:
-				pygame.draw.rect(self.screen, bg[:3], rect, border_radius=5)
-			bd = btn_accent if active else pal["panel_bdr"]
-			pygame.draw.rect(self.screen, bd, rect, 2, border_radius=5)
-			txt_col = C_WHITE if active else C_GRAY
-			self._text(rect.x + 8, rect.centery, label, self.fonts["small"], txt_col)
-			if active:
-				# 激活状态小勾
-				self._text(rect.right - 16, rect.centery, "✓", self.fonts["small"], C_WHITE)
+		# 操作提示（代替行动按钮）
+		if ui.phase in ("p1_plan", "p2_plan"):
+			hints = [
+				("拖动棋子 → 移动规划", C_GRAY),
+				("原地不动 → 自动防御", (80, 120, 200)),
+				("移动 → 自动攻击", pal["accent"]),
+				("敌方主阵 → 自动占领", (160, 130, 40)),
+			]
+			hy = y + h - len(hints) * 18 - 8
+			for htxt, hcol in hints:
+				self._text(x + 6, hy, htxt, self.fonts["tiny"], hcol)
+				hy += 18
 
 	def _draw_unit_card(self, x, y, w, u, game, pal):
 		fc = C_RED if u.faction == FACTION_RED else C_DIS
@@ -850,6 +859,13 @@ class Renderer:
 			self._text(sb.centerx, sb.centery, "AI 代操 ▶", self.fonts["bold"],
 				(180, 180, 180), center=True)
 
+		# 规则按钮（左下角，始终显示）
+		rb  = ui.rules_btn_rect
+		hov = pygame.mouse.get_pos() and rb.collidepoint(pygame.mouse.get_pos())
+		pygame.draw.rect(self.screen, (28, 20, 10) if hov else (18, 12, 6), rb, border_radius=8)
+		pygame.draw.rect(self.screen, C_GOLD, rb, 1, border_radius=8)
+		self._text(rb.centerx, rb.centery, "？ 规则", self.fonts["small"], C_GOLD, center=True)
+
 	# ──────────────────── 进化悬浮面板 ──────────────────
 
 	def _draw_evo_popup(self, game, ui):
@@ -930,6 +946,72 @@ class Renderer:
 			pal["accent_lite"], center=True)
 		self._text(sw // 2, sh // 2 + 22, "点击任意处 / 按键继续…",
 			self.fonts["small"], C_GRAY, center=True)
+
+	# ──────────────────── 规则面板 ───────────────────────
+
+	def _draw_rules_overlay(self, game):
+		sw, sh = self.screen.get_size()
+		# 半透明全屏遮罩
+		mask = _alpha_surf(sw, sh)
+		mask.fill((0, 0, 0, 185))
+		self.screen.blit(mask, (0, 0))
+
+		PW, PH = min(sw - 40, 780), min(sh - 40, 600)
+		px, py = (sw - PW) // 2, (sh - PH) // 2
+		pygame.draw.rect(self.screen, (18, 12, 8), (px, py, PW, PH), border_radius=10)
+		pygame.draw.rect(self.screen, C_GOLD, (px, py, PW, PH), 2, border_radius=10)
+
+		title = self.fonts["title"].render("游戏规则", True, C_GOLD)
+		self.screen.blit(title, title.get_rect(center=(sw // 2, py + 22)))
+		hint = self.fonts["tiny"].render("点击任意处 / ESC 关闭", True, C_GRAY)
+		self.screen.blit(hint, hint.get_rect(center=(sw // 2, py + 46)))
+		pygame.draw.line(self.screen, C_PANEL_BDR, (px + 12, py + 58), (px + PW - 12, py + 58))
+
+		RULES = [
+			("🎯 胜利条件",    C_GOLD, [
+				"• 消灭对方所有单位  →  立即获胜",
+				"• 连续占领敌方本阵 2 回合  →  获胜",
+			]),
+			("⚔ 战斗机制",    C_RED_LITE, [
+				"• 移动后进入攻击状态；原地不动进入防御状态",
+				"• 近战（铁卫/散兽）：只能攻击正交相邻格（十字范围）",
+				"• 远程（弩卫/炮兽）：攻击范围2格（切比雪夫距离）",
+				"• 防御状态：不主动攻击，但会对攻击者反击；受伤-1",
+			]),
+			("💥 挤占（碰撞）", C_RED_LITE, [
+				"• 斜向不可踏入有敌单位的格子",
+				"• 正交踏入触发挤占：双方均攻击→互伤；一方防御→防方反击",
+				"• 参与挤占的单位本回合不再进行普通攻击",
+			]),
+			("⬆ 进化经验",    C_DIS_LITE, [
+				"• 击杀敌方单位 +1 经验（经验 = 击杀数）",
+				"• 奇数回合结束，驻扎在敌方领域 +1 经验",
+				"• lv1 → lv2：需 3 经验；lv2 → lv3：需 5 经验（进化后归零）",
+			]),
+			("🏰 兵种特性",    C_WHITE, [
+				"铁卫(红lv1) 4HP 2攻 spd1  |  散兽(灾lv1) 3HP 2攻 spd1",
+				"盾卫(红lv2) 铁壁：周围友军减伤1  |  甲兽(灾lv2) 硬壳：常驻减伤1",
+				"弩卫/炮兽(lv2远程) 射程2，移动后不可远攻",
+				"lv3 A路：精锐(攻+1)  |  B路：特殊技能兵种",
+			]),
+		]
+
+		y = py + 68
+		lh_section = 18
+		lh_item    = 14
+		for sec_title, sec_col, items in RULES:
+			if y + 30 > py + PH - 12:
+				break
+			ts = self.fonts["bold"].render(sec_title, True, sec_col)
+			self.screen.blit(ts, (px + 18, y))
+			y += lh_section + 2
+			for item in items:
+				if y + lh_item > py + PH - 12:
+					break
+				is2 = self.fonts["tiny"].render(item, True, C_GRAY)
+				self.screen.blit(is2, (px + 28, y))
+				y += lh_item
+			y += 8
 
 	# ──────────────────── 工具 ───────────────────────
 

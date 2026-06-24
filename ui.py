@@ -71,6 +71,10 @@ class UIState:
 		bw, bh = 130, 38
 		self.confirm_btn_rect  = pygame.Rect(sw - bw - 14,         sh - bh - 8, bw, bh)
 		self.simulate_btn_rect = pygame.Rect(sw - bw * 2 - 26,     sh - bh - 8, bw, bh)
+		# 规则按钮（左下角）
+		self.rules_btn_rect    = pygame.Rect(14, sh - bh - 8, 72, bh)
+		# 规则面板开关
+		self.show_rules        = False
 
 	# ──────────────── 主事件入口 ──────────────────
 
@@ -89,7 +93,19 @@ class UIState:
 		if self.phase in ("game_over", "animating"):
 			return None
 
+		if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+			if self.show_rules:
+				self.show_rules = False
+				return None
+
 		if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+			# 规则面板：点任意处关闭，或点规则按钮开启
+			if self.show_rules:
+				self.show_rules = False
+				return None
+			if self.rules_btn_rect.collidepoint(event.pos):
+				self.show_rules = True
+				return None
 			return self._handle_mousedown(event.pos, game)
 
 		if event.type == pygame.MOUSEMOTION:
@@ -190,49 +206,67 @@ class UIState:
 		gs  = cfg.grid_size
 		spd = game.effective_spd(u)
 		if u.planned_action != ACT_DEFEND:
-			if u.has_trait("冲阵") or u.has_trait("劲弩"):
-				# 十字直线移动：只能沿上下左右直线移动（不可斜向）
+			if u.has_trait("冲阵") or u.has_trait("劲弩") or u.has_trait("投射"):
+				# 十字直线移动
 				for ddx, ddy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
 					for step in range(1, spd + 1):
 						nx, ny = u.x + ddx * step, u.y + ddy * step
 						if not (0 <= nx < gs and 0 <= ny < gs):
 							break
 						self.move_hints.add((nx, ny))
+			elif u.has_trait("战旗"):
+				# 旗卫：纯斜向4方向（X形），每步1格，最多spd步
+				for ddx, ddy in [(1, 1), (1, -1), (-1, 1), (-1, -1)]:
+					for step in range(1, spd + 1):
+						nx, ny = u.x + ddx * step, u.y + ddy * step
+						if not (0 <= nx < gs and 0 <= ny < gs):
+							break
+						self.move_hints.add((nx, ny))
+			elif u.has_trait("集群"):
+				# 猎群兽：(±1,±1)(±2,±2) 对角跳格
+				for ox, oy in [(1,1),(1,-1),(-1,1),(-1,-1),(2,2),(2,-2),(-2,2),(-2,-2)]:
+					nx, ny = u.x + ox, u.y + oy
+					if 0 <= nx < gs and 0 <= ny < gs:
+						self.move_hints.add((nx, ny))
+			elif u.has_trait("威压"):
+				# 恐兽：(±1,±2)(±2,±1) 马步跳跃
+				for ox, oy in [(1,2),(1,-2),(-1,2),(-1,-2),(2,1),(2,-1),(-2,1),(-2,-1)]:
+					nx, ny = u.x + ox, u.y + oy
+					if 0 <= nx < gs and 0 <= ny < gs:
+						self.move_hints.add((nx, ny))
 			else:
+				# 默认8方向（铁卫/散兽/甲兽等）—— 切比雪夫距离 ≤ spd
 				for dx in range(-spd, spd + 1):
 					for dy in range(-spd, spd + 1):
-						if abs(dx) + abs(dy) <= spd and (dx, dy) != (0, 0):
+						if max(abs(dx), abs(dy)) <= spd and (dx, dy) != (0, 0):
 							nx, ny = u.x + dx, u.y + dy
 							if 0 <= nx < gs and 0 <= ny < gs:
 								self.move_hints.add((nx, ny))
 		rng = u.attack_range()
 		for ax in range(gs):
 			for ay in range(gs):
-				d = max(abs(ax - u.x), abs(ay - u.y))   # Chebyshev 8方向
-				if 1 <= d <= rng:
-					self.attack_hints.add((ax, ay))
+				if u.ranged:
+					# 远程：切比雪夫（8方向范围2）
+					d = max(abs(ax - u.x), abs(ay - u.y))
+					if 1 <= d <= rng:
+						self.attack_hints.add((ax, ay))
+				else:
+					# 近战基础：十字（曼哈顿距离=1，仅正交4格）
+					if abs(ax - u.x) + abs(ay - u.y) == 1:
+						self.attack_hints.add((ax, ay))
+
+		# 斜向敌方格不可踏入；正交方向敌方格保留（主动挤占触发攻击）
+		for e in game.alive_units():
+			if e.faction != u.faction and not e.is_embryo:
+				dx, dy = e.x - u.x, e.y - u.y
+				if dx != 0 and dy != 0:   # 斜向才过滤
+					self.move_hints.discard((e.x, e.y))
 
 	# ──────────────── 行动按钮 ───────────────────
 
 	def _build_act_buttons(self, u, game):
+		"""行动已自动化（移动→攻击，原地→防御），不再显示手动按钮。"""
 		self.act_btn_rects.clear()
-		cfg    = game.cfg
-		px, pw = 8, cfg.board_offset_x - 16
-		total_h = cfg.grid_size * cfg.cell_size
-		n_btns  = 2
-		if cfg.is_base(u.x, u.y) and not u.is_embryo:
-			n_btns += 1
-		if u.level >= 2 and not u.made_unit and not u.is_embryo and getattr(u, "can_make", True):
-			n_btns += 1
-		start_y = cfg.board_offset_y + total_h - (n_btns * (ACT_BTN_H + 5)) - 6
-		actions = [(ACT_NONE, "⚔ 自动攻击"), (ACT_DEFEND, "🛡 防御")]
-		if cfg.is_base(u.x, u.y) and not u.is_embryo:
-			actions.append((ACT_OCCUPY, "🚩 占领"))
-		if u.level >= 2 and not u.made_unit and not u.is_embryo and getattr(u, "can_make", True):
-			actions.append((ACT_MAKE, "🐣 制造"))
-		for i, (act, label) in enumerate(actions):
-			r = pygame.Rect(px, start_y + i * (ACT_BTN_H + 5), pw, ACT_BTN_H)
-			self.act_btn_rects.append((act, label, r))
 
 	def _set_action(self, act, u, game):
 		u.planned_action = act
@@ -258,6 +292,14 @@ class UIState:
 
 	def _on_confirm(self, game):
 		self._clear_drag()
+		# 联机模式：不走双阵营接替流程
+		if getattr(self, 'online_mode', False):
+			if self.phase in ("p1_plan", "p2_plan"):
+				return "execute"
+			elif self.phase == "result":
+				return "new_round"
+			return None
+		# 本地双人模式
 		if self.phase == "p1_plan":
 			self.phase = "p1_done"
 			self.show_phase_banner = True
@@ -330,9 +372,8 @@ class UIState:
 			return
 		cfg = game.cfg
 		cs  = cfg.cell_size
-		# 棋子中心屏幕坐标
-		scx = cfg.board_offset_x + u.x * cs + cs // 2
-		scy = cfg.board_offset_y + u.y * cs + cs // 2
+		# 棋子中心屏幕坐标（已考虑 view_flip）
+		scx, scy = cfg.cell_center(u.x, u.y)
 
 		n_btns = len(self.evo_options) + 1  # 路线 + 不进化
 		popup_h = n_btns * (EVO_BTN_H + 4) + 36

@@ -64,10 +64,11 @@ EVO_B = "evolved"
 
 # ─── 地形 ────────────────────────────────────
 # 战壕 (4,4)：驻守减伤1；高地 (0,4) (8,4)：攻击+1
-TERRAIN_TRENCH = (4, 4)          # 战壕：防守方减伤1
-TERRAIN_HIGH   = ((0, 4), (8, 4))  # 高地：攻击方+1
-C_TERRAIN_TRENCH = (40, 55, 80)  # 战壕格底色（蓝灰）
-C_TERRAIN_HIGH   = (70, 55, 28)  # 高地格底色（暗金）
+# 暂时清空地形（功能代码保留，重新启用时填回坐标即可）
+TERRAIN_TRENCH = None            # 原 (4, 4)
+TERRAIN_HIGH   = ()              # 原 ((0, 4), (8, 4))
+C_TERRAIN_TRENCH = (40, 55, 80)
+C_TERRAIN_HIGH   = (70, 55, 28)
 
 
 # ─────────────────── 地图配置 ───────────────────
@@ -86,6 +87,12 @@ class GameConfig:
 		self.red_base       = (4, 1)
 		self.dis_base       = (4, 7)
 		self.shared_base    = None
+		# 开局条件（由选择界面写入）
+		self.conditions: set = set()
+		# 极端地形：由 GameState.setup() 随机生成后写入
+		self._extra_terrain: dict = {}  # {(x,y): "high"/"trench"}
+		# 视角翻转（联机红方客户端：将己方翻转至屏幕下方）
+		self.view_flip: bool = False
 
 	@property
 	def screen_w(self) -> int:
@@ -95,17 +102,27 @@ class GameConfig:
 	def screen_h(self) -> int:
 		return self.board_offset_y + self.grid_size * self.cell_size + 118
 
-	def cell_center(self, cx: int, cy: int) -> tuple:
+	def game_to_screen(self, gx: float, gy: float) -> tuple:
+		"""游戏坐标（支持浮点插值）→ 屏幕像素中心，考虑视角翻转。"""
+		if self.view_flip:
+			gx = self.grid_size - 1 - gx
+			gy = self.grid_size - 1 - gy
 		return (
-			self.board_offset_x + cx * self.cell_size + self.cell_size // 2,
-			self.board_offset_y + cy * self.cell_size + self.cell_size // 2,
+			int(self.board_offset_x + gx * self.cell_size + self.cell_size / 2),
+			int(self.board_offset_y + gy * self.cell_size + self.cell_size / 2),
 		)
+
+	def cell_center(self, cx: int, cy: int) -> tuple:
+		return self.game_to_screen(cx, cy)
 
 	def screen_to_cell(self, px: int, py: int):
 		"""屏幕像素 → 棋盘格坐标；越界返回 None"""
 		cx = (px - self.board_offset_x) // self.cell_size
 		cy = (py - self.board_offset_y) // self.cell_size
 		if 0 <= cx < self.grid_size and 0 <= cy < self.grid_size:
+			if self.view_flip:
+				cx = self.grid_size - 1 - cx
+				cy = self.grid_size - 1 - cy
 			return cx, cy
 		return None
 
@@ -116,7 +133,9 @@ class GameConfig:
 		return any((x, y) == pos for pos, _ in self.all_bases())
 
 	def terrain_at(self, x: int, y: int) -> str:
-		"""返回地形类型：'trench' / 'high' / None"""
+		"""返回地形类型：'trench' / 'high' / None（先查实例动态地形）"""
+		if (x, y) in self._extra_terrain:
+			return self._extra_terrain[(x, y)]
 		if (x, y) == TERRAIN_TRENCH:
 			return "trench"
 		if (x, y) in TERRAIN_HIGH:
@@ -140,6 +159,12 @@ class GameConfig:
 		red = [(3, 2), (4, 2), (5, 2), (3, 1), (5, 1)]
 		# 灾方：点对称 (8-x, 8-y)
 		dis = [(5, 6), (4, 6), (3, 6), (5, 7), (3, 7)]
+		return {FACTION_RED: red, FACTION_DIS: dis}
+
+	def tide_positions(self) -> dict:
+		"""潮水开局：7个基础兵种，分布更分散"""
+		red = [(2, 3), (3, 2), (4, 2), (5, 2), (6, 3), (2, 1), (6, 1)]
+		dis = [(8 - x, 8 - y) for x, y in red]
 		return {FACTION_RED: red, FACTION_DIS: dis}
 
 

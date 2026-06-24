@@ -53,12 +53,9 @@ class BaseState:
 			log.append(f"🏳️ {name} 夺回本阵{bpos}")
 
 		if [u for u in real if u.faction == faction] and not effect_rift:
-			self.occupy_count += 1
-			name = "红骑士团" if self.occupier == FACTION_RED else "灾兽群"
-			log.append(f"🚩 {name} 占领本阵{bpos} 第{self.occupy_count}回合")
-			for u in real:
-				if u.level == 1:
-					u.kills += 1
+				self.occupy_count += 1
+				name = "红骑士团" if self.occupier == FACTION_RED else "灾兽群"
+				log.append(f"🚩 {name} 占领本阵{bpos} 第{self.occupy_count}回合")
 		elif effect_rift:
 			log.append(f"🔒 裂痕：本阵{bpos} 不可占领")
 
@@ -96,13 +93,34 @@ class GameState:
 		self.last_attack_events: list = []
 		# 主攻击阶段结束边界（供动画器区分主攻 vs 反击）
 		self.last_attack_main_end: int = 0
+		# 心跳事件标记（每3回合，供 main.py 弹横幅）
+		self.heartbeat_event: bool = False
 
 	def setup(self):
-		pos_map = self.cfg.initial_positions()
+		conds = self.cfg.conditions
+		pos_map = self.cfg.tide_positions() if "tide" in conds else self.cfg.initial_positions()
 		for x, y in pos_map[FACTION_RED]:
 			self.units.append(Unit("铁卫", FACTION_RED, x, y))
 		for x, y in pos_map[FACTION_DIS]:
 			self.units.append(Unit("散兽", FACTION_DIS, x, y))
+		if "extreme_terrain" in conds:
+			self._generate_extreme_terrain(pos_map)
+
+	def _generate_extreme_terrain(self, pos_map):
+		import random
+		cfg = self.cfg
+		occupied = {cfg.red_base, cfg.dis_base}
+		for pos in pos_map.get(FACTION_RED, []) + pos_map.get(FACTION_DIS, []):
+			occupied.add(pos)
+		gs = cfg.grid_size
+		# 中间带随机生成，避开本阵和初始位置
+		mid_lo, mid_hi = gs // 4, gs * 3 // 4
+		candidates = [(x, y) for x in range(gs) for y in range(mid_lo, mid_hi + 1)
+			if (x, y) not in occupied]
+		random.shuffle(candidates)
+		cfg._extra_terrain = {}
+		for i, pos in enumerate(candidates[:5]):
+			cfg._extra_terrain[pos] = "high" if i < 3 else "trench"
 
 	def add_unit(self, name, faction, x, y):
 		u = Unit(name, faction, x, y)
@@ -172,10 +190,38 @@ class GameState:
 
 		self._pre_pos = {u.uid: (u.x, u.y) for u in self.alive_units()}
 
+		# 自动行动：有敌在攻击射程内→攻击（即使不移动）；否则不移动→防御
+		all_u = self.alive_units()
+		for u in all_u:
+			if u.is_embryo:
+				continue
+			if u.planned_dir == DIR_NONE:
+				has_target = any(self._in_attack_range(u, e)
+					for e in all_u
+					if e.faction != u.faction and not e.dead and not e.is_embryo)
+				u.planned_action = ACT_NONE if has_target else ACT_DEFEND
+			else:
+				u.planned_action = ACT_NONE
+
 		erode = set()  # 蚀地已移除
 		self._phase_move(erode, log)
 		self._phase_action(log)
 		self._flush_dead(log)
+
+		conds = self.cfg.conditions
+
+		# 丰饶：每回合末存活未满血单位 +1HP
+		if "abundance" in conds:
+			for u in self.alive_units():
+				if u.hp < u.max_hp:
+					u.heal(1)
+
+		# 战争恩赐：每回合末存活 lv1/lv2 单位 +1经验
+		if "war_gift" in conds:
+			for u in self.alive_units():
+				if u.level < 3 and not u.is_embryo:
+					u.kills += 1
+					log.append(f"🎁 战争恩赐：{u.name} +1经验({u.kills})")
 
 		# 驻扎回血（简易兵营 lv2 +1HP，前线营地 lv3 +2HP）
 		if self.camp_level >= 2:
@@ -188,6 +234,47 @@ class GameState:
 
 		for bpos, bstate in self.base_states.items():
 			bstate.update(self.units_at(*bpos), False, log, bpos)
+
+		# 越线经验：奇数回合结算，驻扎在敌方领域（越过中线）的未满级单位+1经验
+		# 红方往下推(y > gs//2)，灾方往上推(y < gs//2)
+		if self.turn % 2 == 1:
+			gs_half = self.cfg.grid_size // 2
+			for u in self.alive_units():
+				if u.level >= 3 or u.is_embryo:
+					continue
+				in_enemy_half = (
+					(u.faction == FACTION_RED and u.y > gs_half) or
+					(u.faction == FACTION_DIS and u.y < gs_half)
+				)
+				if in_enemy_half:
+					u.kills += 1
+					log.append(f"⚔️ {u.name} 深入敌境 +1经验({u.kills})")
+
+		# 高地首次踏入奖励 +1经验
+		for u in self.alive_units():
+			if u.level >= 3 or u.is_embryo:
+				continue
+			if self.cfg.terrain_at(u.x, u.y) == "high":
+				visited = getattr(u, "_visited_high", set())
+				if (u.x, u.y) not in visited:
+					visited.add((u.x, u.y))
+					u._visited_high = visited
+					u.kills += 1
+					log.append(f"🏔️ {u.name} 首次占领高地 +1经验({u.kills})")
+
+		# 长线战：每3回合，本阵未被敌占则补充1个基础兵种
+		if "long_war" in conds and self.turn % 3 == 0:
+			for bpos, bstate in self.base_states.items():
+				owner = bstate.owner
+				if owner is None:
+					continue
+				if bstate.occupier is not None and bstate.occupier != owner:
+					continue  # 被敌占领，不补充
+				if self.units_at(*bpos):
+					continue  # 格内有棋子，不补充
+				name = "铁卫" if owner == FACTION_RED else "散兽"
+				self.add_unit(name, owner, *bpos)
+				log.append(f"🔄 长线战：{name}({owner[:3]}) 在 {bpos} 生成")
 
 		self._check_evolution(log)
 		self._check_victory(log)
@@ -248,6 +335,9 @@ class GameState:
 			u.x, u.y = cx, cy
 			chariot_moved.add(u.uid)
 
+		# 敌方当前位置集合（规划阶段不可主动踏入，意外挤占仍由碰撞系统处理）
+		enemy_pos = {(e.x, e.y) for e in self.alive_units() if not e.is_embryo}
+
 		intent = {}
 		for u in self.alive_units():
 			if u.uid in chariot_moved:
@@ -262,6 +352,13 @@ class GameState:
 			# 越界 → 原地
 			if not in_bounds(nx, ny, gs):
 				nx, ny = u.x, u.y
+			# 斜向踏入敌格 → 取消移动；正交踏入允许，触发挤占攻击
+			elif (nx, ny) in enemy_pos and any(
+					e.x == nx and e.y == ny and e.faction != u.faction
+					for e in self.alive_units() if not e.is_embryo):
+				ddx, ddy = nx - u.x, ny - u.y
+				if ddx != 0 and ddy != 0:   # 仅斜向禁止
+					nx, ny = u.x, u.y
 			intent[u.uid] = (nx, ny)
 
 		# 冲突处理：区分"静止单位被进入"和"多单位同时移向空格"
@@ -350,6 +447,28 @@ class GameState:
 				log.append(f"➡️ {u.name}({u.faction[:3]}) ({u.x},{u.y})→({tx},{ty})")
 			u.x, u.y = tx, ty
 
+		# 安全清理：如有同阵营单位共格（边界情况），强制挤出到相邻空格
+		from collections import defaultdict as _dd
+		pos_grp = _dd(list)
+		for u in self.alive_units():
+			pos_grp[(u.x, u.y)].append(u)
+		occupied_now = set(pos_grp.keys())
+		for pos, uu in pos_grp.items():
+			by_fac = {}
+			for u in uu:
+				by_fac.setdefault(u.faction, []).append(u)
+			for fac, grp in by_fac.items():
+				if len(grp) <= 1:
+					continue
+				for extra in grp[1:]:
+					for ddx, ddy in [(1,0),(-1,0),(0,1),(0,-1),(1,1),(1,-1),(-1,1),(-1,-1)]:
+						nx, ny = extra.x + ddx, extra.y + ddy
+						if in_bounds(nx, ny, gs) and (nx, ny) not in occupied_now:
+							extra.x, extra.y = nx, ny
+							occupied_now.add((nx, ny))
+							log.append(f"⚠️ 修正重叠：{extra.name} 移至({nx},{ny})")
+							break
+
 		if not silent:
 			self._resolve_collisions(collision_pairs, log)
 
@@ -360,8 +479,10 @@ class GameState:
 			l = self.get_unit_by_uid(l_uid)
 			if not w or not l or w.dead or l.dead or w.faction == l.faction:
 				continue
-			w_atk = (w.planned_action != ACT_DEFEND and not w.is_embryo)
-			l_atk = (l.planned_action != ACT_DEFEND and not l.is_embryo)
+			# 近战碰撞伤害要求正交相邻（曼哈顿=1），斜向冲撞仅阻挡不造成伤害
+			orthogonal = manhattan(w.x, w.y, l.x, l.y) == 1
+			w_atk = (w.planned_action != ACT_DEFEND and not w.is_embryo and orthogonal)
+			l_atk = (l.planned_action != ACT_DEFEND and not l.is_embryo and orthogonal)
 			if w_atk and l_atk:
 				dw = self._calc_damage(w, l, all_alive)
 				dl = self._calc_damage(l, w, all_alive)
@@ -376,12 +497,24 @@ class GameState:
 				log.append(f"💥 碰撞：{w.name}→{l.name}  伤{d}")
 				w._collision_partner = l.uid; l._collision_partner = w.uid
 				self.last_attack_events.append((w.uid, l.uid, False, True))
+				# 被挤占方处于防御状态 → 碰撞反击
+				if l.planned_action == ACT_DEFEND and not l.dead and not l.is_embryo:
+					cd = self._calc_damage(l, w, all_alive)
+					w.take_damage(cd)
+					log.append(f"🔄 挤占反击：{l.name}→{w.name}  伤{cd}")
+					self.last_attack_events.append((l.uid, w.uid, False, True))
 			elif l_atk:
 				d = self._calc_damage(l, w, all_alive)
 				w.take_damage(d)
 				log.append(f"💥 碰撞：{l.name}→{w.name}  伤{d}")
 				w._collision_partner = l.uid; l._collision_partner = w.uid
 				self.last_attack_events.append((l.uid, w.uid, False, True))
+				# 被挤占方处于防御状态 → 碰撞反击
+				if w.planned_action == ACT_DEFEND and not w.dead and not w.is_embryo:
+					cd = self._calc_damage(w, l, all_alive)
+					l.take_damage(cd)
+					log.append(f"🔄 挤占反击：{w.name}→{l.name}  伤{cd}")
+					self.last_attack_events.append((w.uid, l.uid, False, True))
 			else:
 				log.append(f"🤝 碰撞双防：无伤害")
 			for u in (w, l):
@@ -397,8 +530,12 @@ class GameState:
 			if u.planned_action == ACT_DEFEND:
 				u.defending = True
 
+		# 参与了挤占碰撞的棋子本回合不再发起或响应普通攻击
+		collision_uids = {u.uid for u in all_alive if getattr(u, "_collision_partner", None)}
+
 		attackers = [u for u in all_alive
-			if u.planned_action != ACT_DEFEND and not u.is_embryo]
+			if u.planned_action != ACT_DEFEND and not u.is_embryo
+			and u.uid not in collision_uids]
 		import random as _rnd
 		_rnd.shuffle(attackers)
 		attackers.sort(key=lambda u: self.effective_spd(u), reverse=True)
@@ -437,13 +574,15 @@ class GameState:
 				if u.dead:
 					log.append(f"💀 {u.name}({u.faction[:3]}) 阵亡")
 
-		# 反击阶段：被攻击的存活单位进行反击
+		# 反击阶段：被攻击的存活单位进行反击（碰撞参与者跳过）
 		# 防御中 → 反击所有攻击者；未防御 → 只反击第一个攻击者
 		self.last_attack_main_end = len(self.last_attack_events)   # 主攻击事件边界
 		cur_alive = self.alive_units()
 		for tgt_uid, atk_uids in attacks_received.items():
 			tgt = self.get_unit_by_uid(tgt_uid)
 			if not tgt or tgt.dead or tgt.is_embryo:
+				continue
+			if tgt.uid in collision_uids:   # 碰撞参与者不反击
 				continue
 			# 防御单位反击所有人，非防御只反击第一个
 			counter_list = atk_uids if tgt.defending else [atk_uids[0]]
@@ -459,34 +598,32 @@ class GameState:
 				if atk.dead:
 					log.append(f"💀 {atk.name}({atk.faction[:3]}) 反击阵亡")
 
-		# 噬溃：本回合【主攻击】目标死亡则回复1HP（不含反击触发）
-		for atk in attackers:
-			if atk.dead or not atk.has_trait("噬溃"):
+		# 招灾：被主攻击命中时，对第一个攻击者反弹1点伤害（每格每回合触发一次）
+		招灾_triggered = set()
+		for tgt_uid, atk_uids in attacks_received.items():
+			tgt = self.get_unit_by_uid(tgt_uid)
+			if not tgt or not tgt.has_trait("招灾") or tgt_uid in 招灾_triggered:
 				continue
-			# 只检查主攻击阶段的事件（self.last_attack_main_end 之前）
+			招灾_triggered.add(tgt_uid)
+			atk = self.get_unit_by_uid(atk_uids[0])
+			if atk and not atk.dead:
+				atk.take_damage(1)
+				log.append(f"⚡ 招灾：{tgt.name} → {atk.name} 反弹1伤")
+				if atk.dead:
+					log.append(f"💀 {atk.name}({atk.faction[:3]}) 招灾阵亡")
+
+		# 击杀经验：任何单位击杀敌方 +1经验（含铁卫）
+		for atk in attackers:
+			if atk.dead or atk.level >= 3:
+				continue
 			atk_evts = [e for e in self.last_attack_events[:self.last_attack_main_end]
 				if e[0] == atk.uid and not e[2]]
 			for _, tgt_uid, _, _ in atk_evts:
 				tgt = self.get_unit_by_uid(tgt_uid)
 				if tgt and tgt.dead:
-					atk.heal(1)
-					log.append(f"🩸 噬溃：{atk.name} +1HP → {atk.hp}HP")
+					atk.kills += 1
+					log.append(f"☠ {atk.name} 击杀+1经验({atk.kills})")
 					break
-
-		# 列阵协同：打死敌方时，相邻己方列阵单位各+1经验
-		for atk in attackers:
-			if atk.dead or not atk.has_trait("列阵"):
-				continue
-			atk_evts = [e for e in self.last_attack_events if e[0] == atk.uid and not e[2]]
-			killed = any(
-				self.get_unit_by_uid(tid) and self.get_unit_by_uid(tid).dead
-				for _, tid, _, _ in atk_evts
-			)
-			if killed:
-				for nb in adjacent_units(atk, self.alive_units()):
-					if nb.faction == atk.faction and nb.has_trait("列阵") and nb.level < 3:
-						nb.kills += 1
-						log.append(f"🛡 列阵协同：{nb.name} +1经验({nb.kills})")
 
 		# 威压
 		for atk in attackers:
@@ -510,12 +647,17 @@ class GameState:
 			if u.planned_action == ACT_MAKE and u.level >= 2 and not u.made_unit and u.can_make:
 				self._do_make(u, log)
 
+	def _in_attack_range(self, attacker, target):
+		"""近战基础单位仅十字4格（曼哈顿=1），远程单位切比雪夫≤射程。"""
+		rng = attacker.attack_range()
+		if attacker.ranged:
+			return chebyshev(attacker.x, attacker.y, target.x, target.y) <= rng
+		return manhattan(attacker.x, attacker.y, target.x, target.y) == 1
+
 	def _auto_find_target(self, attacker, all_alive):
 		enemies = [u for u in all_alive
 			if u.faction != attacker.faction and not u.dead and not u.is_embryo]
-		rng = attacker.attack_range()
-		in_range = [e for e in enemies
-			if chebyshev(attacker.x, attacker.y, e.x, e.y) <= rng]
+		in_range = [e for e in enemies if self._in_attack_range(attacker, e)]
 		if not in_range:
 			return None
 		atk_pre = self._pre_pos.get(attacker.uid, (attacker.x, attacker.y))
@@ -531,9 +673,7 @@ class GameState:
 		"""按优先级遍历射程内目标，跳过已与攻击者处理过的对；允许远程在碰撞后攻击其他目标"""
 		enemies = [u for u in all_alive
 			if u.faction != attacker.faction and not u.dead and not u.is_embryo]
-		rng = attacker.attack_range()
-		in_range = [e for e in enemies
-			if chebyshev(attacker.x, attacker.y, e.x, e.y) <= rng]
+		in_range = [e for e in enemies if self._in_attack_range(attacker, e)]
 		if not in_range:
 			return None
 		atk_pre = self._pre_pos.get(attacker.uid, (attacker.x, attacker.y))
@@ -551,9 +691,7 @@ class GameState:
 	def _auto_find_target_raw(self, attacker, all_units):
 		enemies = [u for u in all_units
 			if u.faction != attacker.faction and not u.is_embryo]
-		rng = attacker.attack_range()
-		in_range = [e for e in enemies
-			if chebyshev(attacker.x, attacker.y, e.x, e.y) <= rng]
+		in_range = [e for e in enemies if self._in_attack_range(attacker, e)]
 		if not in_range:
 			return None
 		in_range.sort(key=lambda e: chebyshev(attacker.x, attacker.y, e.x, e.y))
@@ -604,28 +742,20 @@ class GameState:
 				u.dead = True
 
 	def _check_evolution(self, log):
-		# 每3回合：每方经验最高且未达进化门槛的单位额外+1经验
+		# 心跳：每3回合，所有存活1级单位各+1经验（战争节奏加速）
+		self.heartbeat_event = False
 		if self.turn % 3 == 0:
-			for faction in (FACTION_RED, FACTION_DIS):
-				fname = "红骑士团" if faction == FACTION_RED else "灾兽群"
-				# 候选：非胚体、未到3级、尚未触发进化的单位
-				def _capped(u):
-					return (u.level == 1 and u.kills >= 1) or (u.level == 2 and u.kills >= 3)
-				cands = [
-					u for u in self.alive_units()
-					if u.faction == faction and not u.is_embryo
-					and u.level < 3 and not _capped(u)
-				]
-				if cands:
-					top = max(cands, key=lambda u: u.kills)
-					top.kills += 1
-					log.append(f"⏱️ {fname}领先奖励：{top.name} +1经验({top.kills})")
-		# 进化触发判定（1→2需1经验，2→3需3经验）
+			self.heartbeat_event = True
+			for u in self.alive_units():
+				if u.level == 1 and not u.is_embryo:
+					u.kills += 1
+					log.append(f"💗 心跳：{u.name} +1经验({u.kills})")
+		# 进化触发判定（1→2需3经验，2→3需5经验，每级独立计算）
 		for u in self.alive_units():
-			if u.level == 1 and u.kills >= 1 and not hasattr(u, "_pending_evo"):
+			if u.level == 1 and u.kills >= 3 and not hasattr(u, "_pending_evo"):
 				u._pending_evo = True
 				log.append(f"⬆️ {u.name}({u.faction[:3]}) 可进化！")
-			if u.level == 2 and u.kills >= 3 and not hasattr(u, "_pending_evo3"):
+			if u.level == 2 and u.kills >= 5 and not hasattr(u, "_pending_evo3"):
 				u._pending_evo3 = True
 				log.append(f"⬆️ {u.name}({u.faction[:3]}) 可进化3级！")
 
@@ -638,27 +768,30 @@ class GameState:
 		u.name     = target_name
 		u.level    = tmpl["level"]
 		u.max_hp   = tmpl["max_hp"]
-		u.hp       = u.max_hp          # 进化补满HP
+		u.hp       = tmpl["max_hp"]        # 先设新 max_hp
 		u.base_atk = tmpl["atk"]
 		u.base_spd = tmpl["spd"]
 		u.trait    = tmpl["trait"]
 		u.ranged   = tmpl["ranged"]
 		u.can_make = tmpl.get("can_make", True)
+		u.kills    = 0                     # 每级独立经验，进化后归零
 		for a in ("_pending_evo", "_pending_evo3"):
 			if hasattr(u, a):
 				delattr(u, a)
-		self.log.append(f"✨ {old}({u.faction[:3]}) → {target_name}！HP补满({u.max_hp})")
+		# 进化：HP增加2点（不补满）
+		u.hp = min(u.max_hp, u.hp + 2)
+		self.log.append(f"✨ {old}({u.faction[:3]}) → {target_name}！+2HP({u.hp}/{u.max_hp})")
 
 	def skip_evolution(self, uid):
-		"""不进化，只补满HP"""
+		"""不进化，保留路线 → +4HP（不补满）"""
 		u = self.get_unit_by_uid(uid)
 		if not u:
 			return
-		u.hp = u.max_hp
+		u.hp = min(u.max_hp, u.hp + 4)
 		for a in ("_pending_evo", "_pending_evo3"):
 			if hasattr(u, a):
 				delattr(u, a)
-		self.log.append(f"💊 {u.name}({u.faction[:3]}) 保持原状，HP补满({u.max_hp})")
+		self.log.append(f"💊 {u.name}({u.faction[:3]}) 保留路线，+4HP({u.hp}/{u.max_hp})")
 
 	def _check_victory(self, log):
 		red = self.faction_units(FACTION_RED)
